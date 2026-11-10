@@ -60,6 +60,7 @@
   .badge{display:inline-block;font-size:.66rem;font-weight:700;padding:.1rem .4rem;border-radius:999px;margin-left:8px;vertical-align:middle}
   .badge.new{background:var(--ok);color:#09130d}
   .nolabel{color:var(--danger);font-size:.8rem}
+  .cnt{display:block;font-size:.7rem;color:var(--muted);font-weight:500;margin-top:2px}
   tr.isnew td{background:rgba(73,199,147,.10)}
   .hidden{display:none}
 </style>
@@ -67,7 +68,7 @@
 <body>
 <div class="wrap">
   <h1>Điểm OT Design — TrueWave</h1>
-  <p class="sub">Quét thẳng board Trello theo ngày: Hằng ngày lấy từ list <b>Done DD/MM</b>, OT lấy từ list <b>OT DD/MM</b>. Điểm chấm theo bảng phân loại sản phẩm (0.5đ đơn giản / 1đ phức tạp).</p>
+  <p class="sub">Quét thẳng board Trello theo ngày: Hằng ngày lấy từ list <b>Done DD/MM</b>, OT lấy từ list <b>OT DD/MM</b> và card phải có <b>nhãn OT</b>. Điểm chấm theo bảng phân loại sản phẩm (0.5đ đơn giản / 1đ phức tạp). Số nhỏ dưới mỗi điểm là <b>số đơn thực</b>.</p>
 
   <div class="tabs">
     <button class="tab on" id="tabDay" type="button">Quét theo ngày</button>
@@ -176,18 +177,25 @@ async function scanDay(){
     const r=await fetch('/api/report?date='+date).then(x=>x.json());
     if(r.error)throw new Error(r.error);
     renderDay(r); msg.className='msg ok';
-    msg.textContent=(r.doneFound?'✓ Done '+r.tag:'(không thấy list Done '+r.tag+')')+(r.otFound?' · ✓ OT '+r.tag:'');
+    let t=(r.doneFound?'✓ Done '+r.tag:'(không thấy list Done '+r.tag+')')+(r.otFound?' · ✓ OT '+r.tag:'');
+    if(r.otMissingLabel){t+=' · ⚠ '+r.otMissingLabel+' card trong OT '+r.tag+' thiếu nhãn OT → chưa tính';msg.className='msg err';}
+    msg.textContent=t;
   }catch(e){ msg.className='msg err'; msg.textContent='Lỗi: '+e.message; }
   $('btnScan').disabled=false;
 }
 function renderDay(r){
-  const b=$('dayBody'); b.innerHTML=''; let TD=0,TO=0;
+  const b=$('dayBody'); b.innerHTML=''; let TD=0,TO=0,TDc=0,TOc=0;
   if(!r.rows.length){b.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--muted)">Không có đơn nào trong ngày này.</td></tr>';}
-  r.rows.forEach(x=>{TD+=x.dailyPts;TO+=x.otPts;
+  r.rows.forEach(x=>{TD+=x.dailyPts;TO+=x.otPts;TDc+=x.dailyCount;TOc+=x.otCount;
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td class="person">${esc(x.person)}</td><td class="daily">${fmt(x.dailyPts)}</td><td class="ot">${fmt(x.otPts)}</td><td class="tot">${fmt(x.totalPts)}</td>`;
+    tr.innerHTML=`<td class="person">${esc(x.person)}</td>`+
+      `<td class="daily">${fmt(x.dailyPts)}<span class="cnt">${x.dailyCount} đơn</span></td>`+
+      `<td class="ot">${fmt(x.otPts)}<span class="cnt">${x.otCount} đơn</span></td>`+
+      `<td class="tot">${fmt(x.totalPts)}<span class="cnt">${x.dailyCount+x.otCount} đơn</span></td>`;
     b.appendChild(tr);});
-  $('dTotD').textContent=fmt(TD);$('dTotO').textContent=fmt(TO);$('dTotA').textContent=fmt(TD+TO);
+  $('dTotD').innerHTML=fmt(TD)+`<span class="cnt">${TDc} đơn</span>`;
+  $('dTotO').innerHTML=fmt(TO)+`<span class="cnt">${TOc} đơn</span>`;
+  $('dTotA').innerHTML=fmt(TD+TO)+`<span class="cnt">${TDc+TOc} đơn</span>`;
   const bd=$('dayBreak'); bd.innerHTML='';
   r.rows.forEach(x=>{
     const d=document.createElement('details'); d.className='pb';
