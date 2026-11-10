@@ -195,8 +195,10 @@ async function buildContext() {
 async function reportDay(dateStr) {
   const ctx = await buildContext();
   const tag = ddmm(dateStr);
-  const doneList = ctx.lists.find(l => l.name === 'Done ' + tag);
-  const otList = ctx.lists.find(l => l.name === 'OT ' + tag);
+  // Khớp linh hoạt: tên list có thể kèm thứ trong tuần, vd "OT CN 04/10", "Done T2 05/10".
+  // Chỉ cần bắt đầu bằng Done/OT và kết thúc bằng tag "DD/MM".
+  const doneList = ctx.lists.find(l => /^done\b/i.test(l.name) && l.name.endsWith(tag));
+  const otList = ctx.lists.find(l => /^ot\b/i.test(l.name) && l.name.endsWith(tag));
   const dailyR = await scanList(doneList && doneList.id, ctx);
   // OT: chỉ tính card vừa nằm trong list "OT DD/MM" vừa có nhãn "OT"
   const otR = await scanList(otList && otList.id, ctx, { requireLabel: 'OT' });
@@ -231,7 +233,8 @@ async function reportDay(dateStr) {
 async function reportMonth(month) {
   const ctx = await buildContext();
   const mm = month.split('-')[1];
-  const dayRe = new RegExp('^(Done|OT) (\\d{2})\\/' + mm + '$');
+  // Cho phép kèm thứ trong tuần giữa Done/OT và ngày, vd "OT CN 04/10".
+  const dayRe = new RegExp('^(Done|OT)\\b.*?(\\d{2})\\/' + mm + '$');
   const targets = ctx.lists.map(l => {
     const m = l.name.match(dayRe); return m ? { id: l.id, kind: m[1], day: m[2] } : null;
   }).filter(Boolean);
