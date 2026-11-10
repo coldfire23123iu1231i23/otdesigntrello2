@@ -3,9 +3,9 @@
 Web app tính điểm OT cho team design: quét thẳng board Trello theo ngày, tính điểm theo bảng phân loại sản phẩm (0.5đ đơn giản / 1đ phức tạp), có báo cáo tháng.
 
 - **Hằng ngày** = các card trong list **`Done DD/MM`**
-- **OT** = các card trong list **`OT DD/MM`**
+- **OT** = các card trong list **`OT DD/MM`** **và** có gắn **nhãn `OT`** (nhãn là dấu bắt buộc, tránh nhầm do định dạng ngày như 4/10). Card ở list OT mà thiếu nhãn OT sẽ **không được tính** và app báo cảnh báo.
 - **Người làm** = member gắn trên card (tự nhận, không cần nhập tay)
-- **Điểm** = label sản phẩm của card → tra bảng phân loại
+- **Điểm** = label sản phẩm của card → tra bảng phân loại. Trong báo cáo ngày, dưới mỗi điểm hiển thị **số đơn thực** (số card).
 - **Cột Template** = catalog sản phẩm; app quét cột này, đánh dấu **SKU mới** vừa thêm và báo sản phẩm chưa có nhãn (tab "Sản phẩm (Template)"). Cron hằng ngày cũng ghi log SKU mới.
 
 ## Chạy thử ở máy

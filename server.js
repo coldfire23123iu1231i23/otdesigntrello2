@@ -5,7 +5,8 @@
  *
  * Nguồn dữ liệu:
  *   - Điểm "Hằng ngày"  = list tên "Done DD/MM"
- *   - Điểm "OT"         = list tên "OT DD/MM"
+ *   - Điểm "OT"         = list tên "OT DD/MM" VÀ card phải có nhãn "OT"
+ *                         (nhãn OT là dấu bắt buộc, tránh nhầm do định dạng ngày)
  * Mỗi card gắn 1 member (người làm) + 1 label sản phẩm → tra bảng phân loại ra điểm.
  *
  * Cấu hình qua biến môi trường (Railway → Variables):
@@ -138,11 +139,28 @@ async function getTemplateProducts(ctx) {
 }
 
 // ---------- scan 1 list → điểm theo người ----------
-async function scanList(listId, ctx) {
-  if (!listId) return {};
-  const cards = await getCards(listId);
+// opts.requireLabel: chỉ tính card vừa nằm trong list vừa có nhãn này (vd 'OT').
+// Trả về { per, scanned, matched, skipped } — skipped = số card bị loại vì thiếu nhãn yêu cầu.
+async function scanList(listId, ctx, opts) {
+  opts = opts || {};
   const per = {}; // personKey -> {count, pts, items:{ident:count}, unknown:count}
+  const result = { per, scanned: 0, matched: 0, skipped: 0 };
+  if (!listId) return result;
+  const cards = await getCards(listId);
+  // Nếu yêu cầu nhãn (vd 'OT'): dựng tập id của các label có đúng tên đó
+  let needLabelIds = null;
+  if (opts.requireLabel) {
+    needLabelIds = new Set(
+      Object.keys(ctx.labels).filter(id => ctx.labels[id] && ctx.labels[id].name === opts.requireLabel)
+    );
+  }
   cards.forEach(c => {
+    result.scanned += 1;
+    if (needLabelIds) {
+      const hasReq = (c.idLabels || []).some(id => needLabelIds.has(id));
+      if (!hasReq) { result.skipped += 1; return; } // trong list nhưng thiếu nhãn → bỏ qua
+    }
+    result.matched += 1;
     const mid = (c.idMembers || [])[0] || '__unassigned';
     const member = mid === '__unassigned' ? 'Chưa gán' : (ctx.members[mid] || mid);
     const person = (ctx.cfg.personNames && ctx.cfg.personNames[member]) || member;
@@ -159,7 +177,7 @@ async function scanList(listId, ctx) {
     if (!lab) per[person].unknown += 1;
     per[person].items[name] = (per[person].items[name] || 0) + 1;
   });
-  return per;
+  return result;
 }
 
 function ddmm(dateStr) {
@@ -179,8 +197,11 @@ async function reportDay(dateStr) {
   const tag = ddmm(dateStr);
   const doneList = ctx.lists.find(l => l.name === 'Done ' + tag);
   const otList = ctx.lists.find(l => l.name === 'OT ' + tag);
-  const daily = await scanList(doneList && doneList.id, ctx);
-  const ot = await scanList(otList && otList.id, ctx);
+  const dailyR = await scanList(doneList && doneList.id, ctx);
+  // OT: chỉ tính card vừa nằm trong list "OT DD/MM" vừa có nhãn "OT"
+  const otR = await scanList(otList && otList.id, ctx, { requireLabel: 'OT' });
+  const daily = dailyR.per;
+  const ot = otR.per;
 
   const people = {};
   function add(src, field) {
@@ -196,6 +217,7 @@ async function reportDay(dateStr) {
   return {
     date: dateStr, tag,
     doneFound: !!doneList, otFound: !!otList,
+    otMissingLabel: otR.skipped, // số card trong list OT nhưng thiếu nhãn OT → không tính
     rows: rows.map(r => ({
       person: r.person,
       dailyPts: round(r.dailyPts), otPts: round(r.otPts), totalPts: round(r.dailyPts + r.otPts),
@@ -216,7 +238,9 @@ async function reportMonth(month) {
 
   const people = {}; const daysSet = {};
   for (const t of targets) {
-    const per = await scanList(t.id, ctx);
+    // OT trong tháng cũng yêu cầu nhãn OT (đồng bộ với báo cáo ngày)
+    const r = await scanList(t.id, ctx, t.kind === 'OT' ? { requireLabel: 'OT' } : undefined);
+    const per = r.per;
     daysSet[t.day] = true;
     for (const person in per) {
       people[person] = people[person] || { person, dailyPts: 0, otPts: 0, days: {} };
