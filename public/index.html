@@ -218,13 +218,20 @@ async function scanMonth(){
   $('btnMonth').disabled=false;
 }
 function renderMonth(r){
-  const b=$('monBody'); b.innerHTML=''; let TD=0,TO=0,TDy=0;
+  const b=$('monBody'); b.innerHTML=''; let TD=0,TO=0,TDy=0,TDc=0,TOc=0;
   if(!r.rows.length){b.innerHTML='<tr><td colspan="5" style="text-align:center;color:var(--muted)">Chưa có dữ liệu tháng này.</td></tr>';}
-  r.rows.forEach(x=>{TD+=x.dailyPts;TO+=x.otPts;TDy+=x.activeDays;
+  r.rows.forEach(x=>{TD+=x.dailyPts;TO+=x.otPts;TDy+=x.activeDays;TDc+=(x.dailyCount||0);TOc+=(x.otCount||0);
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td class="person">${esc(x.person)}</td><td class="daily">${fmt(x.dailyPts)}</td><td class="ot">${fmt(x.otPts)}</td><td class="tot">${fmt(x.totalPts)}</td><td>${x.activeDays}</td>`;
+    tr.innerHTML=`<td class="person">${esc(x.person)}</td>`+
+      `<td class="daily">${fmt(x.dailyPts)}<span class="cnt">${x.dailyCount||0} đơn</span></td>`+
+      `<td class="ot">${fmt(x.otPts)}<span class="cnt">${x.otCount||0} đơn</span></td>`+
+      `<td class="tot">${fmt(x.totalPts)}<span class="cnt">${(x.dailyCount||0)+(x.otCount||0)} đơn</span></td>`+
+      `<td>${x.activeDays}</td>`;
     b.appendChild(tr);});
-  $('mTotD').textContent=fmt(TD);$('mTotO').textContent=fmt(TO);$('mTotA').textContent=fmt(TD+TO);$('mTotDays').textContent=TDy;
+  $('mTotD').innerHTML=fmt(TD)+`<span class="cnt">${TDc} đơn</span>`;
+  $('mTotO').innerHTML=fmt(TO)+`<span class="cnt">${TOc} đơn</span>`;
+  $('mTotA').innerHTML=fmt(TD+TO)+`<span class="cnt">${TDc+TOc} đơn</span>`;
+  $('mTotDays').textContent=TDy;
   const w=$('matrixWrap');
   if(!r.days.length){w.innerHTML='<p style="padding:14px;color:var(--muted)">Chưa có dữ liệu.</p>';return;}
   let h='<table class="matrix"><thead><tr><th>Người</th>';
