@@ -246,9 +246,9 @@ async function reportMonth(month) {
     const per = r.per;
     daysSet[t.day] = true;
     for (const person in per) {
-      people[person] = people[person] || { person, dailyPts: 0, otPts: 0, days: {} };
-      if (t.kind === 'Done') people[person].dailyPts += per[person].pts;
-      else people[person].otPts += per[person].pts;
+      people[person] = people[person] || { person, dailyPts: 0, otPts: 0, dailyCount: 0, otCount: 0, days: {} };
+      if (t.kind === 'Done') { people[person].dailyPts += per[person].pts; people[person].dailyCount += per[person].count; }
+      else { people[person].otPts += per[person].pts; people[person].otCount += per[person].count; }
       people[person].days[t.day] = (people[person].days[t.day] || 0) + per[person].pts;
     }
   }
@@ -256,6 +256,7 @@ async function reportMonth(month) {
   const rows = Object.values(people).sort((a, b) => (b.dailyPts + b.otPts) - (a.dailyPts + a.otPts)).map(r => ({
     person: r.person,
     dailyPts: round(r.dailyPts), otPts: round(r.otPts), totalPts: round(r.dailyPts + r.otPts),
+    dailyCount: r.dailyCount, otCount: r.otCount,
     activeDays: Object.keys(r.days).filter(d => r.days[d] > 0).length,
     byDay: days.map(d => ({ day: d, pts: round(r.days[d] || 0) }))
   }));
