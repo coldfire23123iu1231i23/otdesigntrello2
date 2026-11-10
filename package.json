@@ -1,0 +1,17 @@
+{
+  "name": "truewave-ot-design",
+  "version": "1.0.0",
+  "description": "Tool tính điểm OT design cho team TrueWave — quét Trello theo ngày, báo cáo tháng.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "node-cron": "^3.0.3"
+  }
+}
