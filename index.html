@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Điểm OT Design — TrueWave</title>
+<style>
+  :root{
+    --bg:#0f1117; --surface:#171a22; --surface-2:#1d212b;
+    --fg:#eceef4; --muted:#9aa2b4; --line:#2a2f3b;
+    --accent:#8c86ff; --accent-soft:#26243f;
+    --daily:#f0a957; --ot:#f07a6a; --ok:#49c793; --danger:#f07070;
+    --radius:14px; --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.35);
+    --f:"Inter",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--f);line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1040px;margin:0 auto;padding:22px 16px 60px}
+  h1{font-size:1.5rem;margin:0;font-weight:600;letter-spacing:-.01em}
+  .sub{color:var(--muted);font-size:.86rem;margin:.25rem 0 18px;max-width:70ch}
+  .tabs{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
+  .tab{background:var(--surface);border:1px solid var(--line);color:var(--muted);border-radius:10px;padding:.5rem .9rem;cursor:pointer;font-size:.85rem;font-weight:600;font-family:var(--f)}
+  .tab.on{background:var(--accent);border-color:var(--accent);color:#11131a}
+  .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+  input[type=date],input[type=month]{font-family:var(--f);font-size:.9rem;color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:.5rem .6rem}
+  button.go{background:var(--accent);border:1px solid var(--accent);color:#11131a;font-weight:700;border-radius:10px;padding:.55rem 1.1rem;cursor:pointer;font-size:.9rem;font-family:var(--f)}
+  button.ghost{background:var(--surface);border:1px solid var(--line);color:var(--fg);border-radius:10px;padding:.55rem .9rem;cursor:pointer;font-size:.85rem;font-family:var(--f)}
+  button:disabled{opacity:.55;cursor:default}
+  .msg{font-size:.84rem;color:var(--muted)}
+  .msg.err{color:var(--danger)}
+  .msg.ok{color:var(--ok)}
+  .sumwrap{overflow-x:auto;border-radius:var(--radius);border:1px solid var(--line);box-shadow:var(--shadow);margin-bottom:18px}
+  table{width:100%;border-collapse:collapse;background:var(--surface);font-variant-numeric:tabular-nums;min-width:460px}
+  th,td{padding:11px 14px;text-align:right;border-bottom:1px solid var(--line);font-size:.9rem}
+  th:first-child,td:first-child{text-align:left}
+  thead th{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600;background:var(--surface-2)}
+  td.person{font-weight:600}
+  td.daily,.daily{color:var(--daily)} td.ot,.ot{color:var(--ot)} td.tot{font-weight:700;color:var(--accent)}
+  tfoot td{border-top:2px solid var(--line);border-bottom:none;font-weight:700;background:var(--accent-soft)}
+  .breakdown{margin:10px 0 24px}
+  details.pb{background:var(--surface);border:1px solid var(--line);border-radius:12px;margin-bottom:8px;padding:0 14px}
+  details.pb summary{cursor:pointer;padding:11px 0;font-weight:600;list-style:none;display:flex;gap:10px;align-items:center}
+  details.pb summary::-webkit-details-marker{display:none}
+  details.pb summary .r{margin-left:auto;color:var(--muted);font-size:.82rem;font-weight:500}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 0 12px}
+  .chip{font-size:.76rem;background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:.2rem .55rem;color:var(--muted)}
+  .matrixwrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+  table.matrix th,table.matrix td{white-space:nowrap;font-size:.82rem;padding:8px 10px;border-right:1px solid var(--line)}
+  table.matrix th:first-child,table.matrix td:first-child{position:sticky;left:0;background:var(--surface)}
+  table.matrix thead th{position:sticky;top:0}
+  h2.sec{font-size:1.05rem;margin:20px 0 10px;font-weight:600}
+  .maplist{max-height:460px;overflow:auto;border:1px solid var(--line);border-radius:var(--radius)}
+  table.map td,table.map th{text-align:left}
+  table.map td.catcell{text-align:right;white-space:nowrap}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden}
+  .seg button{border:none;background:var(--surface-2);color:var(--muted);font-size:.74rem;font-weight:700;padding:.25rem .6rem;cursor:pointer;font-family:var(--f)}
+  .seg button.on05{background:var(--ok);color:#09130d} .seg button.on1{background:var(--daily);color:#1a1205}
+  .hint{font-size:.78rem;color:var(--muted);margin-top:16px;max-width:84ch}
+  .badge{display:inline-block;font-size:.66rem;font-weight:700;padding:.1rem .4rem;border-radius:999px;margin-left:8px;vertical-align:middle}
+  .badge.new{background:var(--ok);color:#09130d}
+  .nolabel{color:var(--danger);font-size:.8rem}
+  .cnt{display:block;font-size:.7rem;color:var(--muted);font-weight:500;margin-top:2px}
+  tr.isnew td{background:rgba(73,199,147,.10)}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Điểm OT Design — TrueWave</h1>
+  <p class="sub">Quét thẳng board Trello theo ngày: Hằng ngày lấy từ list <b>Done DD/MM</b>, OT lấy từ list <b>OT DD/MM</b> và card phải có <b>nhãn OT</b>. Điểm chấm theo bảng phân loại sản phẩm (0.5đ đơn giản / 1đ phức tạp). Số nhỏ dưới mỗi điểm là <b>số đơn thực</b>.</p>
+
+  <div class="tabs">
+    <button class="tab on" id="tabDay" type="button">Quét theo ngày</button>
+    <button class="tab" id="tabMonth" type="button">Báo cáo tháng</button>
+    <button class="tab" id="tabMap" type="button">Phân loại sản phẩm</button>
+    <button class="tab" id="tabTpl" type="button">Sản phẩm (Template)</button>
+  </div>
+
+  <!-- DAY -->
+  <section id="viewDay">
+    <div class="bar">
+      <input type="date" id="fDate">
+      <button class="go" id="btnScan" type="button">Quét ngày này</button>
+      <span class="msg" id="dayMsg"></span>
+    </div>
+    <div class="sumwrap">
+      <table>
+        <thead><tr><th>Người làm</th><th>Hằng ngày</th><th>OT</th><th>Tổng điểm</th></tr></thead>
+        <tbody id="dayBody"><tr><td colspan="4" style="text-align:center;color:var(--muted)">Chọn ngày rồi bấm Quét.</td></tr></tbody>
+        <tfoot><tr><td>TỔNG CỘNG</td><td id="dTotD">0</td><td id="dTotO">0</td><td id="dTotA">0</td></tr></tfoot>
+      </table>
+    </div>
+    <div class="breakdown" id="dayBreak"></div>
+  </section>
+
+  <!-- MONTH -->
+  <section id="viewMonth" class="hidden">
+    <div class="bar">
+      <input type="month" id="fMonth">
+      <button class="go" id="btnMonth" type="button">Quét tháng</button>
+      <span class="msg" id="monthMsg"></span>
+    </div>
+    <h2 class="sec">Tổng theo người trong tháng</h2>
+    <div class="sumwrap">
+      <table>
+        <thead><tr><th>Người làm</th><th>Hằng ngày</th><th>OT</th><th>Tổng điểm</th><th>Số ngày</th></tr></thead>
+        <tbody id="monBody"><tr><td colspan="5" style="text-align:center;color:var(--muted)">Chọn tháng rồi bấm Quét.</td></tr></tbody>
+        <tfoot><tr><td>TỔNG CỘNG</td><td id="mTotD">0</td><td id="mTotO">0</td><td id="mTotA">0</td><td id="mTotDays">0</td></tr></tfoot>
+      </table>
+    </div>
+    <h2 class="sec">Chi tiết điểm từng ngày</h2>
+    <div class="matrixwrap" id="matrixWrap"></div>
+  </section>
+
+  <!-- MAP -->
+  <section id="viewMap" class="hidden">
+    <div class="bar">
+      <input type="text" id="mapSearch" placeholder="Tìm sản phẩm…" style="flex:1;min-width:160px;font-family:var(--f);font-size:.9rem;color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:.5rem .6rem">
+      <button class="ghost" id="btnReloadMap" type="button">Tải lại</button>
+      <span class="msg" id="mapMsg"></span>
+    </div>
+    <div class="maplist">
+      <table class="map">
+        <thead><tr><th>Sản phẩm (label Trello)</th><th style="text-align:right">Điểm</th></tr></thead>
+        <tbody id="mapBody"></tbody>
+      </table>
+    </div>
+    <p class="hint">Chỉnh 0.5 / 1 là lưu lên server, áp dụng cho mọi lần quét. Label chưa chỉnh dùng mặc định theo từ khoá (ly/cốc/tumbler/tất/dép/keychain/metal sign = 0.5đ, còn lại 1đ).</p>
+  </section>
+
+  <!-- TEMPLATE -->
+  <section id="viewTpl" class="hidden">
+    <div class="bar">
+      <input type="text" class="search" id="tplSearch" placeholder="Tìm sản phẩm…" style="flex:1;min-width:160px">
+      <button class="go" id="btnScanTpl" type="button">Quét Template</button>
+      <button class="ghost" id="btnAckTpl" type="button">Đã xem hết SKU mới</button>
+      <span class="msg" id="tplMsg"></span>
+    </div>
+    <div id="tplBanner" class="msg" style="margin-bottom:10px"></div>
+    <div class="maplist">
+      <table class="map">
+        <thead><tr><th>Sản phẩm (card Template)</th><th>SKU</th><th>Nhãn chấm điểm</th><th style="text-align:right">Điểm</th></tr></thead>
+        <tbody id="tplBody"></tbody>
+      </table>
+    </div>
+    <p class="hint">Cột Template là catalog sản phẩm. App quét cột này và đánh dấu <b style="color:var(--ok)">MỚI</b> các sản phẩm vừa thêm (so với lần bạn bấm "Đã xem hết"). Sản phẩm chưa có nhãn trùng khớp sẽ báo "chưa có nhãn" — cần tạo label cho nó trên Trello thì mới chấm điểm khi lên đơn. Cron hằng ngày cũng ghi log SKU mới.</p>
+  </section>
+
+  <p class="hint" id="cfgHint"></p>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const fmt=n=>(Math.round(n*10)/10).toString();
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let labelsCache=[];
+
+function show(id){
+  ['viewDay','viewMonth','viewMap','viewTpl'].forEach(v=>$(v).classList.toggle('hidden',v!==id));
+  $('tabDay').classList.toggle('on',id==='viewDay');
+  $('tabMonth').classList.toggle('on',id==='viewMonth');
+  $('tabMap').classList.toggle('on',id==='viewMap');
+  $('tabTpl').classList.toggle('on',id==='viewTpl');
+}
+$('tabDay').onclick=()=>show('viewDay');
+$('tabMonth').onclick=()=>{show('viewMonth');};
+$('tabMap').onclick=()=>{show('viewMap');if(!labelsCache.length)loadMap();};
+$('tabTpl').onclick=()=>{show('viewTpl');if(!tplCache.length)loadTemplate();};
+
+// ---- day ----
+async function scanDay(){
+  const date=$('fDate').value; if(!date)return;
+  const msg=$('dayMsg'); msg.className='msg'; msg.textContent='Đang quét Trello…';
+  $('btnScan').disabled=true;
+  try{
+    const r=await fetch('/api/report?date='+date).then(x=>x.json());
+    if(r.error)throw new Error(r.error);
+    renderDay(r); msg.className='msg ok';
+    let t=(r.doneFound?'✓ Done '+r.tag:'(không thấy list Done '+r.tag+')')+(r.otFound?' · ✓ OT '+r.tag:'');
+    if(r.otMissingLabel){t+=' · ⚠ '+r.otMissingLabel+' card trong OT '+r.tag+' thiếu nhãn OT → chưa tính';msg.className='msg err';}
+    msg.textContent=t;
+  }catch(e){ msg.className='msg err'; msg.textContent='Lỗi: '+e.message; }
+  $('btnScan').disabled=false;
+}
+function renderDay(r){
+  const b=$('dayBody'); b.innerHTML=''; let TD=0,TO=0,TDc=0,TOc=0;
+  if(!r.rows.length){b.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--muted)">Không có đơn nào trong ngày này.</td></tr>';}
+  r.rows.forEach(x=>{TD+=x.dailyPts;TO+=x.otPts;TDc+=x.dailyCount;TOc+=x.otCount;
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td class="person">${esc(x.person)}</td>`+
+      `<td class="daily">${fmt(x.dailyPts)}<span class="cnt">${x.dailyCount} đơn</span></td>`+
+      `<td class="ot">${fmt(x.otPts)}<span class="cnt">${x.otCount} đơn</span></td>`+
+      `<td class="tot">${fmt(x.totalPts)}<span class="cnt">${x.dailyCount+x.otCount} đơn</span></td>`;
+    b.appendChild(tr);});
+  $('dTotD').innerHTML=fmt(TD)+`<span class="cnt">${TDc} đơn</span>`;
+  $('dTotO').innerHTML=fmt(TO)+`<span class="cnt">${TOc} đơn</span>`;
+  $('dTotA').innerHTML=fmt(TD+TO)+`<span class="cnt">${TDc+TOc} đơn</span>`;
+  const bd=$('dayBreak'); bd.innerHTML='';
+  r.rows.forEach(x=>{
+    const d=document.createElement('details'); d.className='pb';
+    const chips=x.items.map(it=>`<span class="chip">${esc(it.name)} ×${it.n}</span>`).join('');
+    d.innerHTML=`<summary>${esc(x.person)}<span class="r">${x.dailyCount+x.otCount} đơn · ${fmt(x.totalPts)} điểm</span></summary><div class="chips">${chips}</div>`;
+    bd.appendChild(d);
+  });
+}
+
+// ---- month ----
+async function scanMonth(){
+  const month=$('fMonth').value; if(!month)return;
+  const msg=$('monthMsg'); msg.className='msg'; msg.textContent='Đang quét cả tháng…';
+  $('btnMonth').disabled=true;
+  try{
+    const r=await fetch('/api/month?month='+month).then(x=>x.json());
+    if(r.error)throw new Error(r.error);
+    renderMonth(r); msg.className='msg ok'; msg.textContent='✓ '+r.days.length+' ngày có dữ liệu';
+  }catch(e){ msg.className='msg err'; msg.textContent='Lỗi: '+e.message; }
+  $('btnMonth').disabled=false;
+}
+function renderMonth(r){
+  const b=$('monBody'); b.innerHTML=''; let TD=0,TO=0,TDy=0;
+  if(!r.rows.length){b.innerHTML='<tr><td colspan="5" style="text-align:center;color:var(--muted)">Chưa có dữ liệu tháng này.</td></tr>';}
+  r.rows.forEach(x=>{TD+=x.dailyPts;TO+=x.otPts;TDy+=x.activeDays;
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td class="person">${esc(x.person)}</td><td class="daily">${fmt(x.dailyPts)}</td><td class="ot">${fmt(x.otPts)}</td><td class="tot">${fmt(x.totalPts)}</td><td>${x.activeDays}</td>`;
+    b.appendChild(tr);});
+  $('mTotD').textContent=fmt(TD);$('mTotO').textContent=fmt(TO);$('mTotA').textContent=fmt(TD+TO);$('mTotDays').textContent=TDy;
+  const w=$('matrixWrap');
+  if(!r.days.length){w.innerHTML='<p style="padding:14px;color:var(--muted)">Chưa có dữ liệu.</p>';return;}
+  let h='<table class="matrix"><thead><tr><th>Người</th>';
+  r.days.forEach(d=>h+=`<th style="text-align:right">${d}/${r.mm}</th>`);
+  h+='<th style="text-align:right">Tổng</th></tr></thead><tbody>';
+  r.rows.forEach(x=>{h+=`<tr><td class="person">${esc(x.person)}</td>`;
+    x.byDay.forEach(c=>h+=`<td style="text-align:right">${c.pts?fmt(c.pts):''}</td>`);
+    h+=`<td class="tot" style="text-align:right">${fmt(x.totalPts)}</td></tr>`;});
+  h+='</tbody></table>'; w.innerHTML=h;
+}
+
+// ---- map ----
+async function loadMap(){
+  const msg=$('mapMsg'); msg.className='msg'; msg.textContent='Đang tải label…';
+  try{
+    const r=await fetch('/api/labels').then(x=>x.json());
+    if(r.error)throw new Error(r.error);
+    labelsCache=r.labels; renderMap(); msg.textContent='';
+  }catch(e){ msg.className='msg err'; msg.textContent='Lỗi: '+e.message; }
+}
+function renderMap(){
+  const f=($('mapSearch').value||'').toLowerCase();
+  const b=$('mapBody'); b.innerHTML='';
+  labelsCache.filter(l=>l.name.toLowerCase().includes(f)).forEach(l=>{
+    const tr=document.createElement('tr');
+    const td1=document.createElement('td'); td1.textContent=l.name;
+    const td2=document.createElement('td'); td2.className='catcell';
+    const seg=document.createElement('span'); seg.className='seg';
+    const b05=document.createElement('button'); b05.textContent='0.5'; b05.className=l.points===0.5?'on05':'';
+    const b1=document.createElement('button'); b1.textContent='1'; b1.className=l.points===1?'on1':'';
+    b05.onclick=()=>setPoints(l.name,0.5); b1.onclick=()=>setPoints(l.name,1);
+    seg.append(b05,b1); td2.appendChild(seg);
+    tr.append(td1,td2); b.appendChild(tr);
+  });
+}
+async function setPoints(name,points){
+  try{
+    const r=await fetch('/api/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,points})}).then(x=>x.json());
+    if(r.error)throw new Error(r.error);
+    const l=labelsCache.find(x=>x.name===name); if(l)l.points=points; renderMap();
+    $('mapMsg').className='msg ok'; $('mapMsg').textContent='Đã lưu'; setTimeout(()=>$('mapMsg').textContent='',1200);
+  }catch(e){ $('mapMsg').className='msg err'; $('mapMsg').textContent='Lỗi: '+e.message; }
+}
+$('mapSearch').oninput=renderMap;
+$('btnReloadMap').onclick=loadMap;
+$('btnScan').onclick=scanDay;
+$('btnMonth').onclick=scanMonth;
+$('fDate').onchange=()=>{};
+
+// ---- template (phát hiện SKU mới) ----
+let tplCache=[];
+async function loadTemplate(){
+  const msg=$('tplMsg');msg.className='msg';msg.textContent='Đang quét Template…';
+  $('btnScanTpl').disabled=true;
+  try{
+    const r=await fetch('/api/template').then(x=>x.json());
+    if(r.error)throw new Error(r.error);
+    tplCache=r.products;renderTemplate();
+    const banner=$('tplBanner');
+    if(r.initialized){banner.className='msg';banner.textContent='Đã khởi tạo danh sách Template ('+r.total+' sản phẩm). Từ lần sau, sản phẩm thêm mới sẽ được đánh dấu MỚI.';}
+    else if(r.newCount){banner.className='msg';banner.innerHTML='<b style="color:var(--ok)">'+r.newCount+' SKU mới</b> trong Template. Xem rồi bấm "Đã xem hết SKU mới".';}
+    else{banner.className='msg ok';banner.textContent='Không có SKU mới. '+r.total+' sản phẩm, '+r.noLabelCount+' chưa có nhãn.';}
+    msg.textContent='';
+  }catch(e){msg.className='msg err';msg.textContent='Lỗi: '+e.message;}
+  $('btnScanTpl').disabled=false;
+}
+function renderTemplate(){
+  const f=($('tplSearch').value||'').toLowerCase(),b=$('tplBody');b.innerHTML='';
+  tplCache.filter(p=>(p.name+' '+(p.sku||'')).toLowerCase().includes(f)).forEach(p=>{
+    const tr=document.createElement('tr');if(p.isNew)tr.className='isnew';
+    const t1=document.createElement('td');t1.innerHTML=esc(p.name)+(p.isNew?'<span class="badge new">MỚI</span>':'');
+    const t2=document.createElement('td');t2.className='sku';t2.textContent=p.sku||'—';
+    const t3=document.createElement('td');
+    const t4=document.createElement('td');t4.className='catcell';
+    if(p.label){
+      t3.textContent='✓';t3.style.color='var(--ok)';
+      const seg=document.createElement('span');seg.className='seg';
+      const b05=document.createElement('button');b05.textContent='0.5';b05.className=p.points===0.5?'on05':'';
+      const b1=document.createElement('button');b1.textContent='1';b1.className=p.points===1?'on1':'';
+      b05.onclick=()=>setTplPoints(p,0.5);b1.onclick=()=>setTplPoints(p,1);
+      seg.appendChild(b05);seg.appendChild(b1);t4.appendChild(seg);
+    }else{t3.innerHTML='<span class="nolabel">chưa có nhãn</span>';t4.textContent='—';}
+    tr.appendChild(t1);tr.appendChild(t2);tr.appendChild(t3);tr.appendChild(t4);b.appendChild(tr);
+  });
+}
+async function setTplPoints(p,points){
+  if(!p.label)return;
+  try{
+    const r=await fetch('/api/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:p.label,points})}).then(x=>x.json());
+    if(r.error)throw new Error(r.error);
+    p.points=points;renderTemplate();labelsCache=[];
+    $('tplMsg').className='msg ok';$('tplMsg').textContent='Đã lưu';setTimeout(()=>$('tplMsg').textContent='',1200);
+  }catch(e){$('tplMsg').className='msg err';$('tplMsg').textContent='Lỗi: '+e.message;}
+}
+async function ackTemplate(){
+  $('btnAckTpl').disabled=true;
+  try{
+    const r=await fetch('/api/template/ack',{method:'POST'}).then(x=>x.json());
+    if(r.error)throw new Error(r.error);
+    await loadTemplate();
+    $('tplMsg').className='msg ok';$('tplMsg').textContent='Đã đánh dấu đã xem';
+  }catch(e){$('tplMsg').className='msg err';$('tplMsg').textContent='Lỗi: '+e.message;}
+  $('btnAckTpl').disabled=false;
+}
+$('tplSearch').oninput=renderTemplate;
+$('btnScanTpl').onclick=loadTemplate;
+$('btnAckTpl').onclick=ackTemplate;
+
+// init
+(function(){
+  const today=new Date().toISOString().slice(0,10);
+  $('fDate').value=today; $('fMonth').value=today.slice(0,7);
+  fetch('/api/health').then(x=>x.json()).then(h=>{
+    if(!h.hasTrello)$('cfgHint').textContent='⚠ Server chưa cấu hình Trello (TRELLO_KEY / TRELLO_TOKEN / TRELLO_BOARD). Thêm biến môi trường trên Railway rồi deploy lại.';
+  }).catch(()=>{});
+})();
+</script>
+</body>
+</html>
