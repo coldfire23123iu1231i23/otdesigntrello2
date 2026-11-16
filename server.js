@@ -132,7 +132,6 @@ const ORDERS_QUERY = `query($q:String!,$cursor:String){
     pageInfo{ hasNextPage endCursor }
     nodes{
       name
-      customer{ displayName }
       lineItems(first:50){ nodes{ title quantity variantTitle customAttributes{ key value } image{ url } } }
     }
   }
@@ -161,7 +160,8 @@ async function fetchOrdersByDate(date) {
       const images = [];
       lines.forEach(li => { const d = li.attrs.find(a => a.k === 'Custom Design Image'); if (d && d.v) images.push(d.v); });
       if (!images.length) lines.forEach(li => { if (li.img) images.push(li.img); });
-      const customer = (n.customer && n.customer.displayName) || '';
+      let customer = '';
+      for (const li of lines) { const cn = li.attrs.find(a => /name/i.test(a.k)); if (cn) { customer = cn.v; break; } }
       out.push({ name: n.name, customer, lines, images, desc: buildDesc(customer, lines) });
     });
     cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
