@@ -106,8 +106,9 @@ async function shopifyToken() {
   const now = Date.now();
   if (shopTokenCache.v && shopTokenCache.exp > now + 60000) return shopTokenCache.v;
   const r = await fetch('https://' + SHOP + '/admin/oauth/access_token', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ client_id: SHOP_CLIENT_ID, client_secret: SHOP_CLIENT_SECRET, grant_type: 'client_credentials' })
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: SHOP_CLIENT_ID, client_secret: SHOP_CLIENT_SECRET })
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.access_token) throw new Error('Shopify token ' + r.status + ': ' + JSON.stringify(j).slice(0, 160));
