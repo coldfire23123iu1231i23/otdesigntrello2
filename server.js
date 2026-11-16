@@ -136,18 +136,29 @@ const ORDERS_QUERY = `query($q:String!,$cursor:String){
     }
   }
 }`;
-function buildDesc(customer, lines) {
-  const out = ['**Khách:** ' + (customer || '—')];
-  lines.forEach(li => {
-    out.push('');
-    out.push('**' + li.title + '**' + (li.variant ? ('  \n' + li.variant) : '') + '  \nSL: ' + li.qty);
-    li.attrs.filter(a => a.k !== 'Custom Design Image').forEach(a => out.push('- ' + a.k + ': ' + a.v));
-  });
+function isImgUrl(v) { return /^https?:\/\/\S+\.(png|jpe?g|webp|gif)(\?|$)/i.test(v || ''); }
+function lineImages(li) {
+  const imgs = [];
+  const cdi = li.attrs.find(a => a.k === 'Custom Design Image');
+  if (cdi && /^https?:\/\//.test(cdi.v)) imgs.push(cdi.v);
+  li.attrs.forEach(a => { if (a.k !== 'Custom Design Image' && isImgUrl(a.v)) imgs.push(a.v); });
+  if (!imgs.length && li.img) imgs.push(li.img);
+  return imgs;
+}
+function lineCustomName(li) {
+  const cn = li.attrs.find(a => /^custom name$/i.test(a.k)) || li.attrs.find(a => /name/i.test(a.k) && !/image|upload/i.test(a.k));
+  return cn ? cn.v : '';
+}
+function buildCardDesc(customer, li) {
+  const out = ['**Tên custom:** ' + (customer || '—'), ''];
+  out.push('**' + li.title + '**' + (li.variant ? ('  \n' + li.variant) : '') + '  \nSL: ' + li.qty);
+  li.attrs.filter(a => !isImgUrl(a.v) && !/^custom name$/i.test(a.k)).forEach(a => out.push('- ' + a.k + ': ' + a.v));
   return out.join('\n');
 }
-async function fetchOrdersByDate(date) {
+// mỗi SẢN PHẨM trong đơn = 1 card; sản phẩm đầu giữ mã đơn, sau thêm -1, -2, -3...
+async function fetchCardsByDate(date) {
   const q = 'created_at:>=' + date + 'T00:00:00 created_at:<=' + date + 'T23:59:59';
-  let cursor = null, out = [];
+  let cursor = null, cards = [];
   do {
     const data = await shopifyGQL(ORDERS_QUERY, { q, cursor });
     const conn = data.orders;
@@ -157,16 +168,21 @@ async function fetchOrdersByDate(date) {
         attrs: (li.customAttributes || []).map(a => ({ k: a.key, v: a.value })),
         img: li.image && li.image.url
       }));
-      const images = [];
-      lines.forEach(li => { const d = li.attrs.find(a => a.k === 'Custom Design Image'); if (d && d.v) images.push(d.v); });
-      if (!images.length) lines.forEach(li => { if (li.img) images.push(li.img); });
-      let customer = '';
-      for (const li of lines) { const cn = li.attrs.find(a => /name/i.test(a.k)); if (cn) { customer = cn.v; break; } }
-      out.push({ name: n.name, customer, lines, images, desc: buildDesc(customer, lines) });
+      lines.forEach((li, i) => {
+        const customer = lineCustomName(li);
+        cards.push({
+          name: n.name + (i === 0 ? '' : '-' + i),
+          orderName: n.name, part: i + 1, totalParts: lines.length,
+          customer, title: li.title, variant: li.variant, qty: li.qty,
+          attrs: li.attrs.filter(a => !isImgUrl(a.v)),
+          images: lineImages(li),
+          desc: buildCardDesc(customer, li)
+        });
+      });
     });
     cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
   } while (cursor);
-  return out;
+  return cards;
 }
 
 async function getLabels() {
@@ -445,8 +461,8 @@ app.get('/api/shopify/orders', async (req, res) => {
     if (!shopHasAuth()) return res.status(400).json({ error: 'Chưa cấu hình Shopify (SHOPIFY_STORE + token hoặc CLIENT_ID/SECRET)' });
     const date = req.query.date;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return res.status(400).json({ error: 'date phải dạng YYYY-MM-DD' });
-    const orders = await fetchOrdersByDate(date);
-    res.json({ date, total: orders.length, orders });
+    const cards = await fetchCardsByDate(date);
+    res.json({ date, total: cards.length, cards });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -465,13 +481,13 @@ app.post('/api/shopify/push', async (req, res) => {
       if (!up) return res.status(400).json({ error: 'Không tìm thấy cột "' + UPLOAD_LIST + '" trên board' });
       idList = up.id;
     }
-    const orders = await fetchOrdersByDate(date);
+    const cards = await fetchCardsByDate(date);
     const cfg = loadConfig();
     const known = new Set(cfg.pushedOrders || []);
     const existing = await getCards(idList, 'name');
     const existNames = new Set(existing.map(c => (c.name || '').trim()));
     const created = [], skipped = [], errors = [];
-    for (const o of orders) {
+    for (const o of cards) {
       if (known.has(o.name) || existNames.has(o.name)) { skipped.push(o.name); continue; }
       try {
         const card = await trelloPost('/cards', { idList, name: o.name, desc: o.desc, pos: 'top' });
@@ -482,7 +498,7 @@ app.post('/api/shopify/push', async (req, res) => {
       } catch (e) { errors.push(o.name + ': ' + e.message); }
     }
     cfg.pushedOrders = Array.from(known); saveConfig(cfg);
-    res.json({ date, total: orders.length, created, skipped, errors });
+    res.json({ date, total: cards.length, created, skipped, errors });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
