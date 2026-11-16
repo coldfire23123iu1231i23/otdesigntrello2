@@ -376,8 +376,8 @@ async function scanOrders(){
   try{
     const r=await fetch('/api/shopify/orders?date='+date).then(x=>x.json());
     if(r.error)throw new Error(r.error);
-    shopOrders=r.orders;renderOrders();
-    msg.className='msg ok';msg.textContent='✓ '+r.total+' đơn ngày '+date.slice(8)+'/'+date.slice(5,7);
+    shopOrders=r.cards;renderOrders();
+    msg.className='msg ok';msg.textContent='✓ '+r.total+' card (sản phẩm) ngày '+date.slice(8)+'/'+date.slice(5,7);
     $('btnPushShop').disabled=!r.total;
   }catch(e){msg.className='msg err';msg.textContent='Lỗi: '+e.message;}
   $('btnScanShop').disabled=false;
@@ -387,9 +387,10 @@ function renderOrders(){
   shopOrders.forEach(o=>{
     const c=document.createElement('div');c.className='ocard';
     const img=o.images&&o.images[0];
-    const attrs=[];o.lines.forEach(li=>{li.attrs.filter(a=>a.k!=='Custom Design Image').forEach(a=>attrs.push('<b>'+esc(a.k)+':</b> '+esc(a.v)));});
+    const attrs=(o.attrs||[]).filter(a=>!/^custom name$/i.test(a.k)).map(a=>'<b>'+esc(a.k)+':</b> '+esc(a.v));
+    const partTag=o.totalParts>1?(' · SP '+o.part+'/'+o.totalParts):'';
     c.innerHTML=(img?'<img class="cover" src="'+esc(img)+'" loading="lazy" alt="">':'<div class="cover"></div>')+
-      '<div class="ob"><div class="onm">'+esc(o.name)+'</div><div class="ocust">'+esc(o.customer||'—')+' · '+o.lines.length+' món</div>'+
+      '<div class="ob"><div class="onm">'+esc(o.name)+'</div><div class="ocust">'+esc(o.customer||'—')+partTag+'</div>'+
       '<div class="oattr">'+(attrs.join('<br>')||'<span style="color:var(--muted)">không có field custom</span>')+'</div></div>';
     g.appendChild(c);
   });
@@ -397,7 +398,7 @@ function renderOrders(){
 async function pushOrders(){
   const date=$('shopDate').value;if(!date||!shopOrders.length)return;
   const idList=$('shopList').value;
-  if(!confirm('Tạo card Trello cho '+shopOrders.length+' đơn ngày '+date+' vào cột đã chọn? (đơn đã tạo sẽ tự bỏ qua)'))return;
+  if(!confirm('Tạo '+shopOrders.length+' card Trello (mỗi sản phẩm 1 card) ngày '+date+' vào cột đã chọn? (card đã tạo sẽ tự bỏ qua)'))return;
   const msg=$('pushMsg');msg.className='msg';msg.textContent='Đang tạo card…';
   $('btnPushShop').disabled=true;
   try{
