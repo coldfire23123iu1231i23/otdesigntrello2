@@ -167,7 +167,7 @@ async function fetchCardsByDate(date) {
         title: li.title, variant: li.variantTitle, qty: li.quantity,
         attrs: (li.customAttributes || []).map(a => ({ k: a.key, v: a.value })),
         img: li.image && li.image.url
-      }));
+      })).filter(li => !/gift\s*box/i.test(li.title || '')); // bỏ Gift Box, không tạo card
       lines.forEach((li, i) => {
         const customer = lineCustomName(li);
         cards.push({
