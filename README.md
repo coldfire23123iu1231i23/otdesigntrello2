@@ -3,10 +3,27 @@
 Web app tính điểm OT cho team design: quét thẳng board Trello theo ngày, tính điểm theo bảng phân loại sản phẩm (0.5đ đơn giản / 1đ phức tạp), có báo cáo tháng.
 
 - **Hằng ngày** = các card trong list **`Done DD/MM`**
-- **OT** = các card trong list **`OT DD/MM`** **và** có gắn **nhãn `OT`** (nhãn là dấu bắt buộc, tránh nhầm do định dạng ngày như 4/10). Card ở list OT mà thiếu nhãn OT sẽ **không được tính** và app báo cảnh báo.
+- **OT** = các card trong list **`OT DD/MM`**
 - **Người làm** = member gắn trên card (tự nhận, không cần nhập tay)
-- **Điểm** = label sản phẩm của card → tra bảng phân loại. Trong báo cáo ngày, dưới mỗi điểm hiển thị **số đơn thực** (số card).
+- **Điểm** = label sản phẩm của card → tra bảng phân loại
 - **Cột Template** = catalog sản phẩm; app quét cột này, đánh dấu **SKU mới** vừa thêm và báo sản phẩm chưa có nhãn (tab "Sản phẩm (Template)"). Cron hằng ngày cũng ghi log SKU mới.
+- **Đơn Shopify → Trello** = quét đơn Shopify theo ngày và tạo card vào cột **UPLOAD ĐƠN HÔM NAY**: tiêu đề = mã đơn (LC#…), mô tả = tên khách + Custom Name/Number/Design Note, ảnh **Custom Design Image** làm cover. Đơn đã tạo thì bỏ qua (không trùng).
+
+## Biến môi trường cho phần Shopify (tuỳ chọn, chỉ cần nếu dùng tab "Đơn Shopify → Trello")
+
+Dùng app trong **Dev Dashboard** (dev.shopify.com): tạo app → cấp scope **read_orders** → lấy **Client ID** + **Client secret** ở tab Overview.
+
+| Biến | Giá trị |
+|---|---|
+| `SHOPIFY_STORE` | `b8t7nn-dr.myshopify.com` (domain myshopify của store) |
+| `SHOPIFY_CLIENT_ID` | Client ID của app Dev Dashboard |
+| `SHOPIFY_CLIENT_SECRET` | Client secret của app Dev Dashboard |
+| `SHOPIFY_API_VERSION` | (tuỳ chọn) mặc định `2026-10` |
+| `UPLOAD_LIST_NAME` | (tuỳ chọn) tên cột đích, mặc định `UPLOAD ĐƠN HÔM NAY` |
+
+> App tự đổi Client ID/Secret lấy access token (client credentials). Nếu dùng custom app kiểu cũ có token tĩnh thì đặt `SHOPIFY_TOKEN` thay cho CLIENT_ID/SECRET.
+
+> Để **tạo card** được, token Trello phải có quyền ghi: tạo lại token với `scope=read,write` (link authorize đổi `scope=read` thành `scope=read,write`).
 
 ## Chạy thử ở máy
 

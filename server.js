@@ -5,8 +5,7 @@
  *
  * Nguồn dữ liệu:
  *   - Điểm "Hằng ngày"  = list tên "Done DD/MM"
- *   - Điểm "OT"         = list tên "OT DD/MM" VÀ card phải có nhãn "OT"
- *                         (nhãn OT là dấu bắt buộc, tránh nhầm do định dạng ngày)
+ *   - Điểm "OT"         = list tên "OT DD/MM"
  * Mỗi card gắn 1 member (người làm) + 1 label sản phẩm → tra bảng phân loại ra điểm.
  *
  * Cấu hình qua biến môi trường (Railway → Variables):
@@ -29,6 +28,15 @@ const TOKEN = process.env.TRELLO_TOKEN || '';
 const BOARD = process.env.TRELLO_BOARD || '';
 const PORT = process.env.PORT || 3000;
 const CONFIG_PATH = process.env.CONFIG_PATH || path.join(__dirname, 'data', 'config.json');
+
+// Shopify (để quét đơn → tạo card Trello). TRELLO token phải có scope read,write mới tạo được card.
+const SHOP = (process.env.SHOPIFY_STORE || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+const SHOP_TOKEN = process.env.SHOPIFY_TOKEN || '';            // token tĩnh (custom app kiểu cũ) — tuỳ chọn
+const SHOP_CLIENT_ID = process.env.SHOPIFY_CLIENT_ID || '';     // app Dev Dashboard: Client ID
+const SHOP_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET || ''; // app Dev Dashboard: Client secret
+const SHOP_API = process.env.SHOPIFY_API_VERSION || '2026-10';
+const shopHasAuth = () => !!(SHOP && (SHOP_TOKEN || (SHOP_CLIENT_ID && SHOP_CLIENT_SECRET)));
+const UPLOAD_LIST = process.env.UPLOAD_LIST_NAME || 'UPLOAD ĐƠN HÔM NAY';
 
 // ---------- config (overrides phân loại + đổi tên người) ----------
 function loadConfig() {
@@ -76,6 +84,88 @@ async function trello(pathname, params) {
     throw new Error('Trello ' + r.status + ': ' + t.slice(0, 200));
   }
   return r.json();
+}
+async function trelloPost(pathname, params) {
+  const url = new URL('https://api.trello.com/1' + pathname);
+  url.searchParams.set('key', KEY);
+  url.searchParams.set('token', TOKEN);
+  if (params) for (const k in params) url.searchParams.set(k, params[k]);
+  const r = await fetch(url, { method: 'POST', headers: { Accept: 'application/json' } });
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    throw new Error('Trello ' + r.status + ': ' + t.slice(0, 200));
+  }
+  return r.json();
+}
+
+// ---------- Shopify: quét đơn theo ngày ----------
+let shopTokenCache = { v: '', exp: 0 };
+async function shopifyToken() {
+  if (SHOP_TOKEN) return SHOP_TOKEN;
+  if (!(SHOP_CLIENT_ID && SHOP_CLIENT_SECRET)) throw new Error('Thiếu SHOPIFY_TOKEN hoặc SHOPIFY_CLIENT_ID/SECRET');
+  const now = Date.now();
+  if (shopTokenCache.v && shopTokenCache.exp > now + 60000) return shopTokenCache.v;
+  const r = await fetch('https://' + SHOP + '/admin/oauth/access_token', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client_id: SHOP_CLIENT_ID, client_secret: SHOP_CLIENT_SECRET, grant_type: 'client_credentials' })
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.access_token) throw new Error('Shopify token ' + r.status + ': ' + JSON.stringify(j).slice(0, 160));
+  shopTokenCache = { v: j.access_token, exp: now + (j.expires_in ? j.expires_in * 1000 : 3600000) };
+  return shopTokenCache.v;
+}
+async function shopifyGQL(query, variables) {
+  const token = await shopifyToken();
+  const r = await fetch('https://' + SHOP + '/admin/api/' + SHOP_API + '/graphql.json', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },
+    body: JSON.stringify({ query, variables })
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error('Shopify ' + r.status + ': ' + JSON.stringify(j).slice(0, 200));
+  if (j.errors) throw new Error('Shopify: ' + JSON.stringify(j.errors).slice(0, 200));
+  return j.data;
+}
+const ORDERS_QUERY = `query($q:String!,$cursor:String){
+  orders(first:100, query:$q, after:$cursor, sortKey:CREATED_AT){
+    pageInfo{ hasNextPage endCursor }
+    nodes{
+      name
+      customer{ displayName }
+      lineItems(first:50){ nodes{ title quantity variantTitle customAttributes{ key value } image{ url } } }
+    }
+  }
+}`;
+function buildDesc(customer, lines) {
+  const out = ['**Khách:** ' + (customer || '—')];
+  lines.forEach(li => {
+    out.push('');
+    out.push('**' + li.title + '**' + (li.variant ? ('  \n' + li.variant) : '') + '  \nSL: ' + li.qty);
+    li.attrs.filter(a => a.k !== 'Custom Design Image').forEach(a => out.push('- ' + a.k + ': ' + a.v));
+  });
+  return out.join('\n');
+}
+async function fetchOrdersByDate(date) {
+  const q = 'created_at:>=' + date + 'T00:00:00 created_at:<=' + date + 'T23:59:59';
+  let cursor = null, out = [];
+  do {
+    const data = await shopifyGQL(ORDERS_QUERY, { q, cursor });
+    const conn = data.orders;
+    (conn.nodes || []).forEach(n => {
+      const lines = (n.lineItems.nodes || []).map(li => ({
+        title: li.title, variant: li.variantTitle, qty: li.quantity,
+        attrs: (li.customAttributes || []).map(a => ({ k: a.key, v: a.value })),
+        img: li.image && li.image.url
+      }));
+      const images = [];
+      lines.forEach(li => { const d = li.attrs.find(a => a.k === 'Custom Design Image'); if (d && d.v) images.push(d.v); });
+      if (!images.length) lines.forEach(li => { if (li.img) images.push(li.img); });
+      const customer = (n.customer && n.customer.displayName) || '';
+      out.push({ name: n.name, customer, lines, images, desc: buildDesc(customer, lines) });
+    });
+    cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
+  } while (cursor);
+  return out;
 }
 
 async function getLabels() {
@@ -139,28 +229,11 @@ async function getTemplateProducts(ctx) {
 }
 
 // ---------- scan 1 list → điểm theo người ----------
-// opts.requireLabel: chỉ tính card vừa nằm trong list vừa có nhãn này (vd 'OT').
-// Trả về { per, scanned, matched, skipped } — skipped = số card bị loại vì thiếu nhãn yêu cầu.
-async function scanList(listId, ctx, opts) {
-  opts = opts || {};
-  const per = {}; // personKey -> {count, pts, items:{ident:count}, unknown:count}
-  const result = { per, scanned: 0, matched: 0, skipped: 0 };
-  if (!listId) return result;
+async function scanList(listId, ctx) {
+  if (!listId) return {};
   const cards = await getCards(listId);
-  // Nếu yêu cầu nhãn (vd 'OT'): dựng tập id của các label có đúng tên đó
-  let needLabelIds = null;
-  if (opts.requireLabel) {
-    needLabelIds = new Set(
-      Object.keys(ctx.labels).filter(id => ctx.labels[id] && ctx.labels[id].name === opts.requireLabel)
-    );
-  }
+  const per = {}; // personKey -> {count, pts, items:{ident:count}, unknown:count}
   cards.forEach(c => {
-    result.scanned += 1;
-    if (needLabelIds) {
-      const hasReq = (c.idLabels || []).some(id => needLabelIds.has(id));
-      if (!hasReq) { result.skipped += 1; return; } // trong list nhưng thiếu nhãn → bỏ qua
-    }
-    result.matched += 1;
     const mid = (c.idMembers || [])[0] || '__unassigned';
     const member = mid === '__unassigned' ? 'Chưa gán' : (ctx.members[mid] || mid);
     const person = (ctx.cfg.personNames && ctx.cfg.personNames[member]) || member;
@@ -177,7 +250,7 @@ async function scanList(listId, ctx, opts) {
     if (!lab) per[person].unknown += 1;
     per[person].items[name] = (per[person].items[name] || 0) + 1;
   });
-  return result;
+  return per;
 }
 
 function ddmm(dateStr) {
@@ -195,15 +268,10 @@ async function buildContext() {
 async function reportDay(dateStr) {
   const ctx = await buildContext();
   const tag = ddmm(dateStr);
-  // Khớp linh hoạt: tên list có thể kèm thứ trong tuần, vd "OT CN 04/10", "Done T2 05/10".
-  // Chỉ cần bắt đầu bằng Done/OT và kết thúc bằng tag "DD/MM".
-  const doneList = ctx.lists.find(l => /^done\b/i.test(l.name) && l.name.endsWith(tag));
-  const otList = ctx.lists.find(l => /^ot\b/i.test(l.name) && l.name.endsWith(tag));
-  const dailyR = await scanList(doneList && doneList.id, ctx);
-  // OT: chỉ tính card vừa nằm trong list "OT DD/MM" vừa có nhãn "OT"
-  const otR = await scanList(otList && otList.id, ctx, { requireLabel: 'OT' });
-  const daily = dailyR.per;
-  const ot = otR.per;
+  const doneList = ctx.lists.find(l => l.name === 'Done ' + tag);
+  const otList = ctx.lists.find(l => l.name === 'OT ' + tag);
+  const daily = await scanList(doneList && doneList.id, ctx);
+  const ot = await scanList(otList && otList.id, ctx);
 
   const people = {};
   function add(src, field) {
@@ -219,7 +287,6 @@ async function reportDay(dateStr) {
   return {
     date: dateStr, tag,
     doneFound: !!doneList, otFound: !!otList,
-    otMissingLabel: otR.skipped, // số card trong list OT nhưng thiếu nhãn OT → không tính
     rows: rows.map(r => ({
       person: r.person,
       dailyPts: round(r.dailyPts), otPts: round(r.otPts), totalPts: round(r.dailyPts + r.otPts),
@@ -233,22 +300,19 @@ async function reportDay(dateStr) {
 async function reportMonth(month) {
   const ctx = await buildContext();
   const mm = month.split('-')[1];
-  // Cho phép kèm thứ trong tuần giữa Done/OT và ngày, vd "OT CN 04/10".
-  const dayRe = new RegExp('^(Done|OT)\\b.*?(\\d{2})\\/' + mm + '$');
+  const dayRe = new RegExp('^(Done|OT) (\\d{2})\\/' + mm + '$');
   const targets = ctx.lists.map(l => {
     const m = l.name.match(dayRe); return m ? { id: l.id, kind: m[1], day: m[2] } : null;
   }).filter(Boolean);
 
   const people = {}; const daysSet = {};
   for (const t of targets) {
-    // OT trong tháng cũng yêu cầu nhãn OT (đồng bộ với báo cáo ngày)
-    const r = await scanList(t.id, ctx, t.kind === 'OT' ? { requireLabel: 'OT' } : undefined);
-    const per = r.per;
+    const per = await scanList(t.id, ctx);
     daysSet[t.day] = true;
     for (const person in per) {
-      people[person] = people[person] || { person, dailyPts: 0, otPts: 0, dailyCount: 0, otCount: 0, days: {} };
-      if (t.kind === 'Done') { people[person].dailyPts += per[person].pts; people[person].dailyCount += per[person].count; }
-      else { people[person].otPts += per[person].pts; people[person].otCount += per[person].count; }
+      people[person] = people[person] || { person, dailyPts: 0, otPts: 0, days: {} };
+      if (t.kind === 'Done') people[person].dailyPts += per[person].pts;
+      else people[person].otPts += per[person].pts;
       people[person].days[t.day] = (people[person].days[t.day] || 0) + per[person].pts;
     }
   }
@@ -256,7 +320,6 @@ async function reportMonth(month) {
   const rows = Object.values(people).sort((a, b) => (b.dailyPts + b.otPts) - (a.dailyPts + a.otPts)).map(r => ({
     person: r.person,
     dailyPts: round(r.dailyPts), otPts: round(r.otPts), totalPts: round(r.dailyPts + r.otPts),
-    dailyCount: r.dailyCount, otCount: r.otCount,
     activeDays: Object.keys(r.days).filter(d => r.days[d] > 0).length,
     byDay: days.map(d => ({ day: d, pts: round(r.days[d] || 0) }))
   }));
@@ -362,6 +425,63 @@ app.post('/api/template/ack', async (req, res) => {
     cfg.knownTemplate = t.products.map(p => p.name);
     saveConfig(cfg);
     res.json({ ok: true, total: cfg.knownTemplate.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// trạng thái + danh sách list (cho selector)
+app.get('/api/shopify/status', (req, res) => res.json({ hasShopify: shopHasAuth(), store: SHOP || null, uploadListName: UPLOAD_LIST }));
+app.get('/api/lists', async (req, res) => {
+  try {
+    if (!(KEY && TOKEN && BOARD)) return res.status(400).json({ error: 'Chưa cấu hình Trello' });
+    const lists = await getLists();
+    res.json({ lists });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// quét đơn Shopify theo ngày (xem trước)
+app.get('/api/shopify/orders', async (req, res) => {
+  try {
+    if (!shopHasAuth()) return res.status(400).json({ error: 'Chưa cấu hình Shopify (SHOPIFY_STORE + token hoặc CLIENT_ID/SECRET)' });
+    const date = req.query.date;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return res.status(400).json({ error: 'date phải dạng YYYY-MM-DD' });
+    const orders = await fetchOrdersByDate(date);
+    res.json({ date, total: orders.length, orders });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// tạo card Trello từ đơn Shopify của 1 ngày
+app.post('/api/shopify/push', async (req, res) => {
+  try {
+    if (!(KEY && TOKEN && BOARD)) return res.status(400).json({ error: 'Chưa cấu hình Trello' });
+    if (!shopHasAuth()) return res.status(400).json({ error: 'Chưa cấu hình Shopify' });
+    const { date } = req.body || {};
+    let { idList } = req.body || {};
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return res.status(400).json({ error: 'date phải dạng YYYY-MM-DD' });
+    if (!idList) {
+      // mặc định đổ vào cột "UPLOAD ĐƠN HÔM NAY"
+      const lists = await getLists();
+      const up = lists.find(l => l.name === UPLOAD_LIST) || lists.find(l => /upload/i.test(l.name));
+      if (!up) return res.status(400).json({ error: 'Không tìm thấy cột "' + UPLOAD_LIST + '" trên board' });
+      idList = up.id;
+    }
+    const orders = await fetchOrdersByDate(date);
+    const cfg = loadConfig();
+    const known = new Set(cfg.pushedOrders || []);
+    const existing = await getCards(idList, 'name');
+    const existNames = new Set(existing.map(c => (c.name || '').trim()));
+    const created = [], skipped = [], errors = [];
+    for (const o of orders) {
+      if (known.has(o.name) || existNames.has(o.name)) { skipped.push(o.name); continue; }
+      try {
+        const card = await trelloPost('/cards', { idList, name: o.name, desc: o.desc, pos: 'top' });
+        for (let i = 0; i < o.images.length; i++) {
+          try { await trelloPost('/cards/' + card.id + '/attachments', { url: o.images[i], setCover: i === 0 ? 'true' : 'false' }); } catch (e) { /* ảnh lỗi thì bỏ qua */ }
+        }
+        known.add(o.name); created.push(o.name);
+      } catch (e) { errors.push(o.name + ': ' + e.message); }
+    }
+    cfg.pushedOrders = Array.from(known); saveConfig(cfg);
+    res.json({ date, total: orders.length, created, skipped, errors });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
