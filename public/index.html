@@ -60,21 +60,29 @@
   .badge{display:inline-block;font-size:.66rem;font-weight:700;padding:.1rem .4rem;border-radius:999px;margin-left:8px;vertical-align:middle}
   .badge.new{background:var(--ok);color:#09130d}
   .nolabel{color:var(--danger);font-size:.8rem}
-  .cnt{display:block;font-size:.7rem;color:var(--muted);font-weight:500;margin-top:2px}
   tr.isnew td{background:rgba(73,199,147,.10)}
+  .ordergrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:4px}
+  .ocard{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+  .ocard .cover{width:100%;aspect-ratio:4/3;object-fit:cover;background:var(--surface-2)}
+  .ocard .ob{padding:10px 12px}
+  .ocard .onm{font-weight:700;font-size:.9rem}
+  .ocard .ocust{font-size:.8rem;color:var(--muted);margin:2px 0 6px}
+  .ocard .oattr{font-size:.76rem;color:var(--fg);line-height:1.5}
+  .ocard .oattr b{color:var(--muted);font-weight:600}
   .hidden{display:none}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>Điểm OT Design — TrueWave</h1>
-  <p class="sub">Quét thẳng board Trello theo ngày: Hằng ngày lấy từ list <b>Done DD/MM</b>, OT lấy từ list <b>OT DD/MM</b> và card phải có <b>nhãn OT</b>. Điểm chấm theo bảng phân loại sản phẩm (0.5đ đơn giản / 1đ phức tạp). Số nhỏ dưới mỗi điểm là <b>số đơn thực</b>.</p>
+  <p class="sub">Quét thẳng board Trello theo ngày: Hằng ngày lấy từ list <b>Done DD/MM</b>, OT lấy từ list <b>OT DD/MM</b>. Điểm chấm theo bảng phân loại sản phẩm (0.5đ đơn giản / 1đ phức tạp).</p>
 
   <div class="tabs">
     <button class="tab on" id="tabDay" type="button">Quét theo ngày</button>
     <button class="tab" id="tabMonth" type="button">Báo cáo tháng</button>
     <button class="tab" id="tabMap" type="button">Phân loại sản phẩm</button>
     <button class="tab" id="tabTpl" type="button">Sản phẩm (Template)</button>
+    <button class="tab" id="tabShop" type="button">Đơn Shopify → Trello</button>
   </div>
 
   <!-- DAY -->
@@ -147,6 +155,24 @@
     <p class="hint">Cột Template là catalog sản phẩm. App quét cột này và đánh dấu <b style="color:var(--ok)">MỚI</b> các sản phẩm vừa thêm (so với lần bạn bấm "Đã xem hết"). Sản phẩm chưa có nhãn trùng khớp sẽ báo "chưa có nhãn" — cần tạo label cho nó trên Trello thì mới chấm điểm khi lên đơn. Cron hằng ngày cũng ghi log SKU mới.</p>
   </section>
 
+  <!-- SHOPIFY -->
+  <section id="viewShop" class="hidden">
+    <div class="bar">
+      <input type="date" id="shopDate">
+      <button class="go" id="btnScanShop" type="button">Quét đơn</button>
+      <span class="msg" id="shopMsg"></span>
+    </div>
+    <div class="bar">
+      <label style="font-size:.82rem;color:var(--muted)">Tạo card vào cột:
+        <select id="shopList" style="font-family:var(--f);font-size:.85rem;color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:.45rem .5rem"></select>
+      </label>
+      <button class="go" id="btnPushShop" type="button" disabled>Tạo card Trello</button>
+      <span class="msg" id="pushMsg"></span>
+    </div>
+    <div class="ordergrid" id="orderGrid"></div>
+    <p class="hint">Mỗi đơn → 1 card: tiêu đề = mã đơn (LC#…), mô tả = tên khách + Custom Name/Number/Design Note, ảnh <b>Custom Design Image</b> làm cover (đơn nhiều món thì đính kèm nhiều ảnh). Đơn đã tạo card sẽ được bỏ qua ở lần quét sau (không tạo trùng). <b>Cần token Trello có quyền ghi (read,write)</b> mới tạo được card.</p>
+  </section>
+
   <p class="hint" id="cfgHint"></p>
 </div>
 
@@ -157,16 +183,18 @@ const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[
 let labelsCache=[];
 
 function show(id){
-  ['viewDay','viewMonth','viewMap','viewTpl'].forEach(v=>$(v).classList.toggle('hidden',v!==id));
+  ['viewDay','viewMonth','viewMap','viewTpl','viewShop'].forEach(v=>$(v).classList.toggle('hidden',v!==id));
   $('tabDay').classList.toggle('on',id==='viewDay');
   $('tabMonth').classList.toggle('on',id==='viewMonth');
   $('tabMap').classList.toggle('on',id==='viewMap');
   $('tabTpl').classList.toggle('on',id==='viewTpl');
+  $('tabShop').classList.toggle('on',id==='viewShop');
 }
 $('tabDay').onclick=()=>show('viewDay');
 $('tabMonth').onclick=()=>{show('viewMonth');};
 $('tabMap').onclick=()=>{show('viewMap');if(!labelsCache.length)loadMap();};
 $('tabTpl').onclick=()=>{show('viewTpl');if(!tplCache.length)loadTemplate();};
+$('tabShop').onclick=()=>{show('viewShop');initShop();};
 
 // ---- day ----
 async function scanDay(){
@@ -177,25 +205,18 @@ async function scanDay(){
     const r=await fetch('/api/report?date='+date).then(x=>x.json());
     if(r.error)throw new Error(r.error);
     renderDay(r); msg.className='msg ok';
-    let t=(r.doneFound?'✓ Done '+r.tag:'(không thấy list Done '+r.tag+')')+(r.otFound?' · ✓ OT '+r.tag:'');
-    if(r.otMissingLabel){t+=' · ⚠ '+r.otMissingLabel+' card trong OT '+r.tag+' thiếu nhãn OT → chưa tính';msg.className='msg err';}
-    msg.textContent=t;
+    msg.textContent=(r.doneFound?'✓ Done '+r.tag:'(không thấy list Done '+r.tag+')')+(r.otFound?' · ✓ OT '+r.tag:'');
   }catch(e){ msg.className='msg err'; msg.textContent='Lỗi: '+e.message; }
   $('btnScan').disabled=false;
 }
 function renderDay(r){
-  const b=$('dayBody'); b.innerHTML=''; let TD=0,TO=0,TDc=0,TOc=0;
+  const b=$('dayBody'); b.innerHTML=''; let TD=0,TO=0;
   if(!r.rows.length){b.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--muted)">Không có đơn nào trong ngày này.</td></tr>';}
-  r.rows.forEach(x=>{TD+=x.dailyPts;TO+=x.otPts;TDc+=x.dailyCount;TOc+=x.otCount;
+  r.rows.forEach(x=>{TD+=x.dailyPts;TO+=x.otPts;
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td class="person">${esc(x.person)}</td>`+
-      `<td class="daily">${fmt(x.dailyPts)}<span class="cnt">${x.dailyCount} đơn</span></td>`+
-      `<td class="ot">${fmt(x.otPts)}<span class="cnt">${x.otCount} đơn</span></td>`+
-      `<td class="tot">${fmt(x.totalPts)}<span class="cnt">${x.dailyCount+x.otCount} đơn</span></td>`;
+    tr.innerHTML=`<td class="person">${esc(x.person)}</td><td class="daily">${fmt(x.dailyPts)}</td><td class="ot">${fmt(x.otPts)}</td><td class="tot">${fmt(x.totalPts)}</td>`;
     b.appendChild(tr);});
-  $('dTotD').innerHTML=fmt(TD)+`<span class="cnt">${TDc} đơn</span>`;
-  $('dTotO').innerHTML=fmt(TO)+`<span class="cnt">${TOc} đơn</span>`;
-  $('dTotA').innerHTML=fmt(TD+TO)+`<span class="cnt">${TDc+TOc} đơn</span>`;
+  $('dTotD').textContent=fmt(TD);$('dTotO').textContent=fmt(TO);$('dTotA').textContent=fmt(TD+TO);
   const bd=$('dayBreak'); bd.innerHTML='';
   r.rows.forEach(x=>{
     const d=document.createElement('details'); d.className='pb';
@@ -218,20 +239,13 @@ async function scanMonth(){
   $('btnMonth').disabled=false;
 }
 function renderMonth(r){
-  const b=$('monBody'); b.innerHTML=''; let TD=0,TO=0,TDy=0,TDc=0,TOc=0;
+  const b=$('monBody'); b.innerHTML=''; let TD=0,TO=0,TDy=0;
   if(!r.rows.length){b.innerHTML='<tr><td colspan="5" style="text-align:center;color:var(--muted)">Chưa có dữ liệu tháng này.</td></tr>';}
-  r.rows.forEach(x=>{TD+=x.dailyPts;TO+=x.otPts;TDy+=x.activeDays;TDc+=(x.dailyCount||0);TOc+=(x.otCount||0);
+  r.rows.forEach(x=>{TD+=x.dailyPts;TO+=x.otPts;TDy+=x.activeDays;
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td class="person">${esc(x.person)}</td>`+
-      `<td class="daily">${fmt(x.dailyPts)}<span class="cnt">${x.dailyCount||0} đơn</span></td>`+
-      `<td class="ot">${fmt(x.otPts)}<span class="cnt">${x.otCount||0} đơn</span></td>`+
-      `<td class="tot">${fmt(x.totalPts)}<span class="cnt">${(x.dailyCount||0)+(x.otCount||0)} đơn</span></td>`+
-      `<td>${x.activeDays}</td>`;
+    tr.innerHTML=`<td class="person">${esc(x.person)}</td><td class="daily">${fmt(x.dailyPts)}</td><td class="ot">${fmt(x.otPts)}</td><td class="tot">${fmt(x.totalPts)}</td><td>${x.activeDays}</td>`;
     b.appendChild(tr);});
-  $('mTotD').innerHTML=fmt(TD)+`<span class="cnt">${TDc} đơn</span>`;
-  $('mTotO').innerHTML=fmt(TO)+`<span class="cnt">${TOc} đơn</span>`;
-  $('mTotA').innerHTML=fmt(TD+TO)+`<span class="cnt">${TDc+TOc} đơn</span>`;
-  $('mTotDays').textContent=TDy;
+  $('mTotD').textContent=fmt(TD);$('mTotO').textContent=fmt(TO);$('mTotA').textContent=fmt(TD+TO);$('mTotDays').textContent=TDy;
   const w=$('matrixWrap');
   if(!r.days.length){w.innerHTML='<p style="padding:14px;color:var(--muted)">Chưa có dữ liệu.</p>';return;}
   let h='<table class="matrix"><thead><tr><th>Người</th>';
@@ -340,10 +354,67 @@ $('tplSearch').oninput=renderTemplate;
 $('btnScanTpl').onclick=loadTemplate;
 $('btnAckTpl').onclick=ackTemplate;
 
+// ---- shopify → trello ----
+let shopOrders=[], shopInited=false, uploadListName='UPLOAD ĐƠN HÔM NAY';
+async function initShop(){
+  if(shopInited)return; shopInited=true;
+  try{
+    const st=await fetch('/api/shopify/status').then(x=>x.json());
+    uploadListName=st.uploadListName||uploadListName;
+    if(!st.hasShopify){$('shopMsg').className='msg err';$('shopMsg').textContent='Chưa cấu hình Shopify (SHOPIFY_STORE / SHOPIFY_TOKEN) trên Railway.';}
+  }catch(e){}
+  try{
+    const r=await fetch('/api/lists').then(x=>x.json());
+    const sel=$('shopList');sel.innerHTML='';
+    (r.lists||[]).forEach(l=>{const o=document.createElement('option');o.value=l.id;o.textContent=l.name;if(l.name===uploadListName)o.selected=true;sel.appendChild(o);});
+  }catch(e){}
+}
+async function scanOrders(){
+  const date=$('shopDate').value;if(!date)return;
+  const msg=$('shopMsg');msg.className='msg';msg.textContent='Đang quét đơn Shopify…';
+  $('btnScanShop').disabled=true;$('btnPushShop').disabled=true;
+  try{
+    const r=await fetch('/api/shopify/orders?date='+date).then(x=>x.json());
+    if(r.error)throw new Error(r.error);
+    shopOrders=r.orders;renderOrders();
+    msg.className='msg ok';msg.textContent='✓ '+r.total+' đơn ngày '+date.slice(8)+'/'+date.slice(5,7);
+    $('btnPushShop').disabled=!r.total;
+  }catch(e){msg.className='msg err';msg.textContent='Lỗi: '+e.message;}
+  $('btnScanShop').disabled=false;
+}
+function renderOrders(){
+  const g=$('orderGrid');g.innerHTML='';
+  shopOrders.forEach(o=>{
+    const c=document.createElement('div');c.className='ocard';
+    const img=o.images&&o.images[0];
+    const attrs=[];o.lines.forEach(li=>{li.attrs.filter(a=>a.k!=='Custom Design Image').forEach(a=>attrs.push('<b>'+esc(a.k)+':</b> '+esc(a.v)));});
+    c.innerHTML=(img?'<img class="cover" src="'+esc(img)+'" loading="lazy" alt="">':'<div class="cover"></div>')+
+      '<div class="ob"><div class="onm">'+esc(o.name)+'</div><div class="ocust">'+esc(o.customer||'—')+' · '+o.lines.length+' món</div>'+
+      '<div class="oattr">'+(attrs.join('<br>')||'<span style="color:var(--muted)">không có field custom</span>')+'</div></div>';
+    g.appendChild(c);
+  });
+}
+async function pushOrders(){
+  const date=$('shopDate').value;if(!date||!shopOrders.length)return;
+  const idList=$('shopList').value;
+  if(!confirm('Tạo card Trello cho '+shopOrders.length+' đơn ngày '+date+' vào cột đã chọn? (đơn đã tạo sẽ tự bỏ qua)'))return;
+  const msg=$('pushMsg');msg.className='msg';msg.textContent='Đang tạo card…';
+  $('btnPushShop').disabled=true;
+  try{
+    const r=await fetch('/api/shopify/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date,idList})}).then(x=>x.json());
+    if(r.error)throw new Error(r.error);
+    msg.className='msg ok';
+    msg.textContent='✓ Tạo '+r.created.length+' card · bỏ qua '+r.skipped.length+' (đã có)'+(r.errors.length?' · lỗi '+r.errors.length:'');
+  }catch(e){msg.className='msg err';msg.textContent='Lỗi: '+e.message;}
+  $('btnPushShop').disabled=false;
+}
+$('btnScanShop').onclick=scanOrders;
+$('btnPushShop').onclick=pushOrders;
+
 // init
 (function(){
   const today=new Date().toISOString().slice(0,10);
-  $('fDate').value=today; $('fMonth').value=today.slice(0,7);
+  $('fDate').value=today; $('fMonth').value=today.slice(0,7); $('shopDate').value=today;
   fetch('/api/health').then(x=>x.json()).then(h=>{
     if(!h.hasTrello)$('cfgHint').textContent='⚠ Server chưa cấu hình Trello (TRELLO_KEY / TRELLO_TOKEN / TRELLO_BOARD). Thêm biến môi trường trên Railway rồi deploy lại.';
   }).catch(()=>{});
