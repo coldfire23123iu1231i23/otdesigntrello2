@@ -38,6 +38,8 @@ const SHOP_API = process.env.SHOPIFY_API_VERSION || '2026-10';
 const shopHasAuth = () => !!(SHOP && (SHOP_TOKEN || (SHOP_CLIENT_ID && SHOP_CLIENT_SECRET)));
 const UPLOAD_LIST = process.env.UPLOAD_LIST_NAME || 'UPLOAD ĐƠN HÔM NAY';
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
 // ---------- config (overrides phân loại + đổi tên người) ----------
 function loadConfig() {
   try {
@@ -90,12 +92,17 @@ async function trelloPost(pathname, params) {
   url.searchParams.set('key', KEY);
   url.searchParams.set('token', TOKEN);
   if (params) for (const k in params) url.searchParams.set(k, params[k]);
-  const r = await fetch(url, { method: 'POST', headers: { Accept: 'application/json' } });
-  if (!r.ok) {
-    const t = await r.text().catch(() => '');
-    throw new Error('Trello ' + r.status + ': ' + t.slice(0, 200));
+  // Trello giới hạn ~100 req/10s/token → gặp 429 thì chờ rồi thử lại
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const r = await fetch(url, { method: 'POST', headers: { Accept: 'application/json' } });
+    if (r.status === 429) { await sleep(1000 * (attempt + 1)); continue; }
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error('Trello ' + r.status + ': ' + t.slice(0, 200));
+    }
+    return r.json();
   }
-  return r.json();
+  throw new Error('Trello 429: quá nhiều yêu cầu (thử lại sau)');
 }
 
 // ---------- Shopify: quét đơn theo ngày ----------
@@ -455,51 +462,109 @@ app.get('/api/lists', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// quét đơn Shopify theo ngày (xem trước)
+// tìm cột UPLOAD + tập tên card đã có trên cột đó (để đồng bộ trạng thái "đã upload")
+async function uploadedState(idList) {
+  const set = new Set();
+  let listName = UPLOAD_LIST, listId = idList || null;
+  if (KEY && TOKEN && BOARD) {
+    try {
+      if (!listId) {
+        const lists = await getLists();
+        const up = lists.find(l => l.name === UPLOAD_LIST) || lists.find(l => /upload/i.test(l.name));
+        if (up) { listId = up.id; listName = up.name; }
+      } else {
+        const lists = await getLists();
+        const found = lists.find(l => l.id === listId);
+        if (found) listName = found.name;
+      }
+      if (listId) { const ex = await getCards(listId, 'name'); ex.forEach(c => set.add((c.name || '').trim())); }
+    } catch (e) { /* lỗi đọc Trello → coi như chưa upload */ }
+    try { (loadConfig().pushedOrders || []).forEach(n => set.add(n)); } catch (e) {}
+  }
+  return { set, listName, listId };
+}
+
+// quét đơn Shopify theo ngày (xem trước) + đánh dấu đơn nào đã upload lên Trello
 app.get('/api/shopify/orders', async (req, res) => {
   try {
     if (!shopHasAuth()) return res.status(400).json({ error: 'Chưa cấu hình Shopify (SHOPIFY_STORE + token hoặc CLIENT_ID/SECRET)' });
     const date = req.query.date;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return res.status(400).json({ error: 'date phải dạng YYYY-MM-DD' });
     const cards = await fetchCardsByDate(date);
-    res.json({ date, total: cards.length, cards });
+    const up = await uploadedState(req.query.idList);
+    const out = cards.map(c => Object.assign({}, c, { uploaded: up.set.has(c.name) }));
+    res.json({ date, total: out.length, uploadListName: up.listName, uploadedCount: out.filter(c => c.uploaded).length, cards: out });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// tạo card Trello từ đơn Shopify của 1 ngày
-app.post('/api/shopify/push', async (req, res) => {
+// ---------- tạo card Trello (chạy nền để tránh timeout của gateway) ----------
+const jobs = new Map(); // jobId -> trạng thái
+function newJobId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+
+async function runPushJob(job, date, idList, names) {
   try {
-    if (!(KEY && TOKEN && BOARD)) return res.status(400).json({ error: 'Chưa cấu hình Trello' });
-    if (!shopHasAuth()) return res.status(400).json({ error: 'Chưa cấu hình Shopify' });
-    const { date } = req.body || {};
-    let { idList } = req.body || {};
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return res.status(400).json({ error: 'date phải dạng YYYY-MM-DD' });
-    if (!idList) {
-      // mặc định đổ vào cột "UPLOAD ĐƠN HÔM NAY"
-      const lists = await getLists();
-      const up = lists.find(l => l.name === UPLOAD_LIST) || lists.find(l => /upload/i.test(l.name));
-      if (!up) return res.status(400).json({ error: 'Không tìm thấy cột "' + UPLOAD_LIST + '" trên board' });
-      idList = up.id;
+    let cards = await fetchCardsByDate(date);
+    if (Array.isArray(names) && names.length) {
+      const want = new Set(names);
+      cards = cards.filter(c => want.has(c.name)); // chỉ tạo các card người dùng chọn (đã bỏ card xoá)
     }
-    const cards = await fetchCardsByDate(date);
     const cfg = loadConfig();
     const known = new Set(cfg.pushedOrders || []);
-    const existing = await getCards(idList, 'name');
-    const existNames = new Set(existing.map(c => (c.name || '').trim()));
-    const created = [], skipped = [], errors = [];
+    let existNames = new Set();
+    try { (await getCards(idList, 'name')).forEach(c => existNames.add((c.name || '').trim())); } catch (e) {}
+    job.total = cards.length;
     for (const o of cards) {
-      if (known.has(o.name) || existNames.has(o.name)) { skipped.push(o.name); continue; }
+      if (known.has(o.name) || existNames.has(o.name)) { job.skipped.push(o.name); job.done++; continue; }
       try {
         const card = await trelloPost('/cards', { idList, name: o.name, desc: o.desc, pos: 'top' });
         for (let i = 0; i < o.images.length; i++) {
           try { await trelloPost('/cards/' + card.id + '/attachments', { url: o.images[i], setCover: i === 0 ? 'true' : 'false' }); } catch (e) { /* ảnh lỗi thì bỏ qua */ }
         }
-        known.add(o.name); created.push(o.name);
-      } catch (e) { errors.push(o.name + ': ' + e.message); }
+        known.add(o.name); existNames.add(o.name); job.created.push(o.name);
+      } catch (e) { job.errors.push(o.name + ': ' + e.message); }
+      job.done++;
     }
     cfg.pushedOrders = Array.from(known); saveConfig(cfg);
-    res.json({ date, total: cards.length, created, skipped, errors });
+  } catch (e) {
+    job.fatal = e.message;
+  } finally {
+    job.finished = true; job.finishedAt = Date.now();
+  }
+}
+
+// bắt đầu tạo card → trả jobId ngay (không chờ xong)
+app.post('/api/shopify/push', async (req, res) => {
+  try {
+    if (!(KEY && TOKEN && BOARD)) return res.status(400).json({ error: 'Chưa cấu hình Trello' });
+    if (!shopHasAuth()) return res.status(400).json({ error: 'Chưa cấu hình Shopify' });
+    const { date, names } = req.body || {};
+    let { idList } = req.body || {};
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return res.status(400).json({ error: 'date phải dạng YYYY-MM-DD' });
+    if (!idList) {
+      const lists = await getLists();
+      const up = lists.find(l => l.name === UPLOAD_LIST) || lists.find(l => /upload/i.test(l.name));
+      if (!up) return res.status(400).json({ error: 'Không tìm thấy cột "' + UPLOAD_LIST + '" trên board' });
+      idList = up.id;
+    }
+    // dọn job cũ đã xong quá 10 phút
+    for (const [id, j] of jobs) if (j.finished && Date.now() - (j.finishedAt || 0) > 10 * 60 * 1000) jobs.delete(id);
+    const id = newJobId();
+    const job = { id, date, total: 0, done: 0, created: [], skipped: [], errors: [], finished: false, startedAt: Date.now() };
+    jobs.set(id, job);
+    runPushJob(job, date, idList, names); // chạy nền, không await
+    res.json({ jobId: id });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// theo dõi tiến độ tạo card
+app.get('/api/shopify/push/status', (req, res) => {
+  const job = jobs.get(req.query.jobId);
+  if (!job) return res.status(404).json({ error: 'Không tìm thấy tiến trình (có thể đã xong và bị dọn). Quét lại để kiểm tra.' });
+  res.json({
+    total: job.total, done: job.done,
+    created: job.created, skipped: job.skipped, errors: job.errors,
+    finished: job.finished, fatal: job.fatal || null
+  });
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
