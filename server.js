@@ -37,6 +37,7 @@ const SHOP_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET || ''; // app Dev D
 const SHOP_API = process.env.SHOPIFY_API_VERSION || '2026-10';
 const shopHasAuth = () => !!(SHOP && (SHOP_TOKEN || (SHOP_CLIENT_ID && SHOP_CLIENT_SECRET)));
 const UPLOAD_LIST = process.env.UPLOAD_LIST_NAME || 'UPLOAD ĐƠN HÔM NAY';
+const CLASSIFY_PASS = process.env.CLASSIFY_PASS || ''; // mật khẩu để chỉnh phân loại điểm (đặt trên Railway)
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -367,7 +368,7 @@ if (process.env.BASIC_USER && process.env.BASIC_PASS) {
   });
 }
 
-app.get('/api/health', (req, res) => res.json({ ok: true, hasTrello: !!(KEY && TOKEN && BOARD) }));
+app.get('/api/health', (req, res) => res.json({ ok: true, hasTrello: !!(KEY && TOKEN && BOARD), classifyLocked: !!CLASSIFY_PASS }));
 
 app.get('/api/report', async (req, res) => {
   try {
@@ -407,6 +408,9 @@ app.get('/api/labels', async (req, res) => {
 
 // lưu phân loại: body { name, points }  (points 0.5 | 1 | null để xoá override)
 app.post('/api/classify', (req, res) => {
+  if (!CLASSIFY_PASS) return res.status(503).json({ error: 'Chưa đặt mật khẩu (thêm biến CLASSIFY_PASS trên Railway rồi deploy lại)' });
+  const pass = req.get('x-classify-pass') || (req.body && req.body.pass) || '';
+  if (pass !== CLASSIFY_PASS) return res.status(401).json({ error: 'Sai mật khẩu' });
   const { name, points } = req.body || {};
   if (!name) return res.status(400).json({ error: 'thiếu name' });
   const cfg = loadConfig();
