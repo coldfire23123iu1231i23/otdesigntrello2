@@ -62,13 +62,17 @@
   .nolabel{color:var(--danger);font-size:.8rem}
   tr.isnew td{background:rgba(73,199,147,.10)}
   .ordergrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:4px}
-  .ocard{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+  .ocard{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
   .ocard .cover{width:100%;aspect-ratio:4/3;object-fit:cover;background:var(--surface-2)}
   .ocard .ob{padding:10px 12px}
   .ocard .onm{font-weight:700;font-size:.9rem}
   .ocard .ocust{font-size:.8rem;color:var(--muted);margin:2px 0 6px}
   .ocard .oattr{font-size:.76rem;color:var(--fg);line-height:1.5}
   .ocard .oattr b{color:var(--muted);font-weight:600}
+  .ocard .del{position:absolute;top:7px;right:7px;width:28px;height:28px;border-radius:8px;border:1px solid var(--line);background:rgba(10,12,18,.72);color:var(--danger);font-size:1rem;font-weight:800;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:2}
+  .ocard .del:hover{background:var(--danger);color:#fff;border-color:var(--danger)}
+  .ocard.uploaded{opacity:.55}
+  .badge.up{background:var(--accent);color:#11131a}
   .hidden{display:none}
 </style>
 </head>
@@ -170,7 +174,7 @@
       <span class="msg" id="pushMsg"></span>
     </div>
     <div class="ordergrid" id="orderGrid"></div>
-    <p class="hint">Mỗi đơn → 1 card: tiêu đề = mã đơn (LC#…), mô tả = tên khách + Custom Name/Number/Design Note, ảnh <b>Custom Design Image</b> làm cover (đơn nhiều món thì đính kèm nhiều ảnh). Đơn đã tạo card sẽ được bỏ qua ở lần quét sau (không tạo trùng). <b>Cần token Trello có quyền ghi (read,write)</b> mới tạo được card.</p>
+    <p class="hint">Mỗi sản phẩm → 1 card: tiêu đề = mã đơn (LC#…), mô tả = tên khách + Custom Name/Number/Design Note, ảnh <b>Custom Design Image</b> làm cover. Card đã có trên cột UPLOAD được gắn nhãn <b style="color:var(--accent)">ĐÃ UPLOAD</b> và tự bỏ qua khi tạo (không trùng). Bấm <b style="color:var(--danger)">✕</b> ở góc card để bỏ sản phẩm không muốn tạo. Nút tạo chạy nền nên không bị lỗi timeout dù nhiều đơn. <b>Cần token Trello có quyền ghi (read,write)</b>.</p>
   </section>
 
   <p class="hint" id="cfgHint"></p>
@@ -369,45 +373,75 @@ async function initShop(){
     (r.lists||[]).forEach(l=>{const o=document.createElement('option');o.value=l.id;o.textContent=l.name;if(l.name===uploadListName)o.selected=true;sel.appendChild(o);});
   }catch(e){}
 }
+function pushables(){ return shopOrders.filter(o=>!o.uploaded); }
+function updatePushCount(){
+  const n=pushables().length;
+  $('btnPushShop').disabled=!n;
+  $('btnPushShop').textContent=n?('Tạo '+n+' card Trello'):'Hết đơn cần tạo';
+}
 async function scanOrders(){
   const date=$('shopDate').value;if(!date)return;
   const msg=$('shopMsg');msg.className='msg';msg.textContent='Đang quét đơn Shopify…';
-  $('btnScanShop').disabled=true;$('btnPushShop').disabled=true;
+  $('btnScanShop').disabled=true;$('btnPushShop').disabled=true;$('pushMsg').textContent='';
   try{
-    const r=await fetch('/api/shopify/orders?date='+date).then(x=>x.json());
+    const idList=$('shopList').value;
+    const r=await fetch('/api/shopify/orders?date='+date+(idList?('&idList='+idList):'')).then(x=>x.json());
     if(r.error)throw new Error(r.error);
     shopOrders=r.cards;renderOrders();
-    msg.className='msg ok';msg.textContent='✓ '+r.total+' card (sản phẩm) ngày '+date.slice(8)+'/'+date.slice(5,7);
-    $('btnPushShop').disabled=!r.total;
+    const left=pushables().length;
+    msg.className='msg ok';
+    msg.textContent='✓ '+r.total+' card ngày '+date.slice(8)+'/'+date.slice(5,7)+' · đã upload '+(r.uploadedCount||0)+' · còn '+left+' cần tạo';
   }catch(e){msg.className='msg err';msg.textContent='Lỗi: '+e.message;}
   $('btnScanShop').disabled=false;
 }
 function renderOrders(){
   const g=$('orderGrid');g.innerHTML='';
-  shopOrders.forEach(o=>{
-    const c=document.createElement('div');c.className='ocard';
+  if(!shopOrders.length){g.innerHTML='<p style="color:var(--muted)">Không có đơn.</p>';updatePushCount();return;}
+  shopOrders.forEach((o,idx)=>{
+    const c=document.createElement('div');c.className='ocard'+(o.uploaded?' uploaded':'');
     const img=o.images&&o.images[0];
     const attrs=(o.attrs||[]).filter(a=>!/^custom name$/i.test(a.k)).map(a=>'<b>'+esc(a.k)+':</b> '+esc(a.v));
     const partTag=o.totalParts>1?(' · SP '+o.part+'/'+o.totalParts):'';
-    c.innerHTML=(img?'<img class="cover" src="'+esc(img)+'" loading="lazy" alt="">':'<div class="cover"></div>')+
-      '<div class="ob"><div class="onm">'+esc(o.name)+'</div><div class="ocust">'+esc(o.customer||'—')+partTag+'</div>'+
+    const upBadge=o.uploaded?'<span class="badge up">ĐÃ UPLOAD</span>':'';
+    c.innerHTML='<button class="del" type="button" title="Bỏ sản phẩm này, không tạo card">✕</button>'+
+      (img?'<img class="cover" src="'+esc(img)+'" loading="lazy" alt="">':'<div class="cover"></div>')+
+      '<div class="ob"><div class="onm">'+esc(o.name)+upBadge+'</div><div class="ocust">'+esc(o.customer||'—')+partTag+'</div>'+
       '<div class="oattr">'+(attrs.join('<br>')||'<span style="color:var(--muted)">không có field custom</span>')+'</div></div>';
+    c.querySelector('.del').onclick=()=>{ shopOrders.splice(idx,1); renderOrders(); };
     g.appendChild(c);
   });
+  updatePushCount();
 }
 async function pushOrders(){
-  const date=$('shopDate').value;if(!date||!shopOrders.length)return;
+  const date=$('shopDate').value;const items=pushables();if(!date||!items.length)return;
   const idList=$('shopList').value;
-  if(!confirm('Tạo '+shopOrders.length+' card Trello (mỗi sản phẩm 1 card) ngày '+date+' vào cột đã chọn? (card đã tạo sẽ tự bỏ qua)'))return;
-  const msg=$('pushMsg');msg.className='msg';msg.textContent='Đang tạo card…';
-  $('btnPushShop').disabled=true;
+  const names=items.map(o=>o.name);
+  if(!confirm('Tạo '+names.length+' card Trello ngày '+date+' vào cột đã chọn?\n(Card đã có trên Trello sẽ tự bỏ qua, sản phẩm bạn đã xoá sẽ không tạo.)'))return;
+  const msg=$('pushMsg');msg.className='msg';msg.textContent='Đang bắt đầu…';
+  $('btnPushShop').disabled=true;$('btnScanShop').disabled=true;
   try{
-    const r=await fetch('/api/shopify/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date,idList})}).then(x=>x.json());
-    if(r.error)throw new Error(r.error);
-    msg.className='msg ok';
-    msg.textContent='✓ Tạo '+r.created.length+' card · bỏ qua '+r.skipped.length+' (đã có)'+(r.errors.length?' · lỗi '+r.errors.length:'');
+    const start=await fetch('/api/shopify/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date,idList,names})}).then(x=>x.json());
+    if(start.error)throw new Error(start.error);
+    const jobId=start.jobId;
+    while(true){
+      await new Promise(r=>setTimeout(r,1500));
+      const s=await fetch('/api/shopify/push/status?jobId='+jobId).then(x=>x.json());
+      if(s.error)throw new Error(s.error);
+      msg.className='msg';
+      msg.textContent='Đang tạo card… '+s.done+'/'+s.total+' (✓'+s.created.length+' · bỏ qua '+s.skipped.length+(s.errors.length?' · lỗi '+s.errors.length:'')+')';
+      if(s.finished){
+        if(s.fatal)throw new Error(s.fatal);
+        msg.className=s.errors.length?'msg':'msg ok';
+        msg.textContent='✓ Xong: tạo '+s.created.length+' card · bỏ qua '+s.skipped.length+' (đã có)'+(s.errors.length?' · lỗi '+s.errors.length:'');
+        const done=new Set([...s.created,...s.skipped]);
+        shopOrders.forEach(o=>{ if(done.has(o.name))o.uploaded=true; });
+        renderOrders();
+        break;
+      }
+    }
   }catch(e){msg.className='msg err';msg.textContent='Lỗi: '+e.message;}
-  $('btnPushShop').disabled=false;
+  $('btnScanShop').disabled=false;
+  updatePushCount();
 }
 $('btnScanShop').onclick=scanOrders;
 $('btnPushShop').onclick=pushOrders;
