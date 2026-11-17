@@ -152,11 +152,11 @@
     <div id="tplBanner" class="msg" style="margin-bottom:10px"></div>
     <div class="maplist">
       <table class="map">
-        <thead><tr><th>Sản phẩm (card Template)</th><th>SKU</th><th>Nhãn chấm điểm</th><th style="text-align:right">Điểm</th></tr></thead>
+        <thead><tr><th>Sản phẩm (card Template)</th><th>SKU</th><th>Nhãn Trello khớp</th></tr></thead>
         <tbody id="tplBody"></tbody>
       </table>
     </div>
-    <p class="hint">Cột Template là catalog sản phẩm. App quét cột này và đánh dấu <b style="color:var(--ok)">MỚI</b> các sản phẩm vừa thêm (so với lần bạn bấm "Đã xem hết"). Sản phẩm chưa có nhãn trùng khớp sẽ báo "chưa có nhãn" — cần tạo label cho nó trên Trello thì mới chấm điểm khi lên đơn. Cron hằng ngày cũng ghi log SKU mới.</p>
+    <p class="hint">Cột Template chỉ để <b>phát hiện sản phẩm mới</b>: app quét cột này và đánh dấu <b style="color:var(--ok)">MỚI</b> các sản phẩm vừa thêm (so với lần bạn bấm "Đã xem hết"). Cột "Nhãn Trello khớp" cho biết template đã có label tương ứng chưa — <b style="color:var(--danger)">chưa có nhãn</b> thì cần tạo label trên Trello. <b>Điểm không chỉnh ở đây</b> — điểm đặt ở tab "Phân loại sản phẩm" và được tính theo các card gắn nhãn sản phẩm đó trên Trello.</p>
   </section>
 
   <!-- SHOPIFY -->
@@ -340,26 +340,10 @@ function renderTemplate(){
     const t1=document.createElement('td');t1.innerHTML=esc(p.name)+(p.isNew?'<span class="badge new">MỚI</span>':'');
     const t2=document.createElement('td');t2.className='sku';t2.textContent=p.sku||'—';
     const t3=document.createElement('td');
-    const t4=document.createElement('td');t4.className='catcell';
-    if(p.label){
-      t3.textContent='✓';t3.style.color='var(--ok)';
-      const seg=document.createElement('span');seg.className='seg';
-      const b05=document.createElement('button');b05.textContent='0.5';b05.className=p.points===0.5?'on05':'';
-      const b1=document.createElement('button');b1.textContent='1';b1.className=p.points===1?'on1':'';
-      b05.onclick=()=>setTplPoints(p,0.5);b1.onclick=()=>setTplPoints(p,1);
-      seg.appendChild(b05);seg.appendChild(b1);t4.appendChild(seg);
-    }else{t3.innerHTML='<span class="nolabel">chưa có nhãn</span>';t4.textContent='—';}
-    tr.appendChild(t1);tr.appendChild(t2);tr.appendChild(t3);tr.appendChild(t4);b.appendChild(tr);
+    if(p.label){ t3.innerHTML='<span style="color:var(--ok)">✓ '+esc(p.label)+'</span>'; }
+    else{ t3.innerHTML='<span class="nolabel">chưa có nhãn</span>'; }
+    tr.appendChild(t1);tr.appendChild(t2);tr.appendChild(t3);b.appendChild(tr);
   });
-}
-async function setTplPoints(p,points){
-  if(!p.label)return;
-  if(!ensurePass())return;
-  try{
-    await classifyReq({name:p.label,points});
-    p.points=points;renderTemplate();labelsCache=[];
-    $('tplMsg').className='msg ok';$('tplMsg').textContent='Đã lưu';setTimeout(()=>$('tplMsg').textContent='',1200);
-  }catch(e){$('tplMsg').className='msg err';$('tplMsg').textContent='Lỗi: '+e.message;}
 }
 async function ackTemplate(){
   $('btnAckTpl').disabled=true;
