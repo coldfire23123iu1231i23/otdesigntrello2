@@ -138,7 +138,7 @@
         <tbody id="mapBody"></tbody>
       </table>
     </div>
-    <p class="hint">Chỉnh 0.5 / 1 là lưu lên server, áp dụng cho mọi lần quét. Label chưa chỉnh dùng mặc định theo từ khoá (ly/cốc/tumbler/tất/dép/keychain/metal sign = 0.5đ, còn lại 1đ).</p>
+    <p class="hint">Chỉnh 0.5 / 1 là lưu lên server, áp dụng cho mọi lần quét. <b>Cần nhập mật khẩu</b> mới chỉnh được (nhập 1 lần/phiên). Label chưa chỉnh dùng mặc định theo từ khoá (ly/cốc/tumbler/tất/dép/keychain/metal sign = 0.5đ, còn lại 1đ).</p>
   </section>
 
   <!-- TEMPLATE -->
@@ -285,10 +285,27 @@ function renderMap(){
     tr.append(td1,td2); b.appendChild(tr);
   });
 }
+// ---- mật khẩu chỉnh phân loại ----
+let classifyPass=''; try{classifyPass=sessionStorage.getItem('cpass')||'';}catch(e){}
+function ensurePass(){
+  if(!classifyPass){
+    const p=prompt('Nhập mật khẩu để chỉnh phân loại điểm:');
+    if(p==null||p==='')return false;
+    classifyPass=p; try{sessionStorage.setItem('cpass',p);}catch(e){}
+  }
+  return true;
+}
+async function classifyReq(body){
+  const r=await fetch('/api/classify',{method:'POST',headers:{'Content-Type':'application/json','x-classify-pass':classifyPass},body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({}));
+  if(r.status===401){ classifyPass=''; try{sessionStorage.removeItem('cpass');}catch(e){} throw new Error('Sai mật khẩu — thử lại'); }
+  if(!r.ok||j.error)throw new Error(j.error||('HTTP '+r.status));
+  return j;
+}
 async function setPoints(name,points){
+  if(!ensurePass())return;
   try{
-    const r=await fetch('/api/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,points})}).then(x=>x.json());
-    if(r.error)throw new Error(r.error);
+    await classifyReq({name,points});
     const l=labelsCache.find(x=>x.name===name); if(l)l.points=points; renderMap();
     $('mapMsg').className='msg ok'; $('mapMsg').textContent='Đã lưu'; setTimeout(()=>$('mapMsg').textContent='',1200);
   }catch(e){ $('mapMsg').className='msg err'; $('mapMsg').textContent='Lỗi: '+e.message; }
@@ -337,9 +354,9 @@ function renderTemplate(){
 }
 async function setTplPoints(p,points){
   if(!p.label)return;
+  if(!ensurePass())return;
   try{
-    const r=await fetch('/api/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:p.label,points})}).then(x=>x.json());
-    if(r.error)throw new Error(r.error);
+    await classifyReq({name:p.label,points});
     p.points=points;renderTemplate();labelsCache=[];
     $('tplMsg').className='msg ok';$('tplMsg').textContent='Đã lưu';setTimeout(()=>$('tplMsg').textContent='',1200);
   }catch(e){$('tplMsg').className='msg err';$('tplMsg').textContent='Lỗi: '+e.message;}
