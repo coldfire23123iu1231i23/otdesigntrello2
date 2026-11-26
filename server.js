@@ -26,6 +26,9 @@ const cron = require('node-cron');
 const KEY = process.env.TRELLO_KEY || '';
 const TOKEN = process.env.TRELLO_TOKEN || '';
 const BOARD = process.env.TRELLO_BOARD || '';
+const BOARD2 = process.env.TRELLO_BOARD_2 || ''; // board phụ (vd TrueWave Des 2) — tuỳ chọn
+// Danh sách board đang bật (board chính + board phụ nếu có). Điểm cộng gộp cả 2 board.
+function boardIds() { return [BOARD, BOARD2].filter(Boolean); }
 const PORT = process.env.PORT || 3000;
 const CONFIG_PATH = process.env.CONFIG_PATH || path.join(__dirname, 'data', 'config.json');
 
@@ -193,28 +196,39 @@ async function fetchCardsByDate(date) {
   return cards;
 }
 
-async function getLabels() {
-  const c = cget('labels'); if (c) return c;
-  const a = await trello('/boards/' + BOARD + '/labels', { fields: 'name,color', limit: '1000' });
+async function getLabels(board) {
+  board = board || BOARD;
+  const c = cget('labels:' + board); if (c) return c;
+  const a = await trello('/boards/' + board + '/labels', { fields: 'name,color', limit: '1000' });
   const byId = {};
   a.forEach(l => { byId[l.id] = { name: (l.name || '').trim(), color: l.color }; });
-  cset('labels', byId, 5 * 60 * 1000);
+  cset('labels:' + board, byId, 5 * 60 * 1000);
   return byId;
 }
-async function getMembers() {
-  const c = cget('members'); if (c) return c;
-  const a = await trello('/boards/' + BOARD + '/members', { fields: 'fullName' });
+async function getMembers(board) {
+  board = board || BOARD;
+  const c = cget('members:' + board); if (c) return c;
+  const a = await trello('/boards/' + board + '/members', { fields: 'fullName' });
   const byId = {};
   a.forEach(m => { byId[m.id] = m.fullName || m.id; });
-  cset('members', byId, 5 * 60 * 1000);
+  cset('members:' + board, byId, 5 * 60 * 1000);
   return byId;
 }
-async function getLists() {
-  const c = cget('lists'); if (c) return c;
-  const a = await trello('/boards/' + BOARD + '/lists', { fields: 'name', limit: '1000' });
+async function getLists(board) {
+  board = board || BOARD;
+  const c = cget('lists:' + board); if (c) return c;
+  const a = await trello('/boards/' + board + '/lists', { fields: 'name', limit: '1000' });
   const out = a.map(l => ({ id: l.id, name: (l.name || '').trim() }));
-  cset('lists', out, 60 * 1000);
+  cset('lists:' + board, out, 60 * 1000);
   return out;
+}
+async function getBoardName(board) {
+  board = board || BOARD;
+  const c = cget('boardName:' + board); if (c) return c;
+  let name = board;
+  try { const b = await trello('/boards/' + board, { fields: 'name' }); name = (b.name || board).trim(); } catch (e) {}
+  cset('boardName:' + board, name, 10 * 60 * 1000);
+  return name;
 }
 async function getCards(listId, fields) {
   return trello('/lists/' + listId + '/cards', { fields: fields || 'idMembers,idLabels', limit: '1000' });
@@ -284,21 +298,34 @@ function ddmm(dateStr) {
   return p[2] + '/' + p[1];
 }
 
-async function buildContext() {
-  const [labels, members, lists] = await Promise.all([getLabels(), getMembers(), getLists()]);
-  return { labels, members, lists, cfg: loadConfig() };
+async function buildContext(board) {
+  board = board || BOARD;
+  const [labels, members, lists] = await Promise.all([getLabels(board), getMembers(board), getLists(board)]);
+  return { board, labels, members, lists, cfg: loadConfig() };
 }
 
-// báo cáo 1 ngày
-async function reportDay(dateStr) {
-  const ctx = await buildContext();
-  const tag = ddmm(dateStr);
-  const doneList = ctx.lists.find(l => l.name === 'Done ' + tag);
-  const otList = ctx.lists.find(l => l.name === 'OT ' + tag);
-  const daily = await scanList(doneList && doneList.id, ctx);
-  const ot = await scanList(otList && otList.id, ctx);
+// Quét cột Template trên TẤT CẢ board, gộp sản phẩm (trùng tên thì ưu tiên bản đã có nhãn)
+async function getTemplateProductsAll() {
+  const byName = {};
+  let listName = null;
+  for (const board of boardIds()) {
+    const ctx = await buildContext(board);
+    const t = await getTemplateProducts(ctx);
+    if (t.listName && !listName) listName = t.listName;
+    t.products.forEach(p => {
+      const ex = byName[p.name];
+      if (!ex) byName[p.name] = p;
+      else if (!ex.label && p.label) byName[p.name] = p;
+    });
+  }
+  return { listName, products: Object.values(byName) };
+}
 
+// báo cáo 1 ngày — gộp Done + OT của TẤT CẢ board
+async function reportDay(dateStr) {
+  const tag = ddmm(dateStr);
   const people = {};
+  let doneFound = false, otFound = false;
   function add(src, field) {
     for (const person in src) {
       people[person] = people[person] || { person, dailyPts: 0, otPts: 0, dailyCount: 0, otCount: 0, items: {} };
@@ -307,11 +334,20 @@ async function reportDay(dateStr) {
       for (const it in src[person].items) people[person].items[it] = (people[person].items[it] || 0) + src[person].items[it];
     }
   }
-  add(daily, 'daily'); add(ot, 'ot');
+  for (const board of boardIds()) {
+    const ctx = await buildContext(board);
+    const doneList = ctx.lists.find(l => l.name === 'Done ' + tag);
+    const otList = ctx.lists.find(l => l.name === 'OT ' + tag);
+    if (doneList) doneFound = true;
+    if (otList) otFound = true;
+    const daily = await scanList(doneList && doneList.id, ctx);
+    const ot = await scanList(otList && otList.id, ctx);
+    add(daily, 'daily'); add(ot, 'ot');
+  }
   const rows = Object.values(people).sort((a, b) => (b.dailyPts + b.otPts) - (a.dailyPts + a.otPts));
   return {
     date: dateStr, tag,
-    doneFound: !!doneList, otFound: !!otList,
+    doneFound, otFound,
     rows: rows.map(r => ({
       person: r.person,
       dailyPts: round(r.dailyPts), otPts: round(r.otPts), totalPts: round(r.dailyPts + r.otPts),
@@ -321,24 +357,25 @@ async function reportDay(dateStr) {
   };
 }
 
-// báo cáo tháng: duyệt mọi list Done DD/MM và OT DD/MM của tháng
+// báo cáo tháng: duyệt mọi list Done DD/MM và OT DD/MM của tháng — gộp TẤT CẢ board
 async function reportMonth(month) {
-  const ctx = await buildContext();
   const mm = month.split('-')[1];
   const dayRe = new RegExp('^(Done|OT) (\\d{2})\\/' + mm + '$');
-  const targets = ctx.lists.map(l => {
-    const m = l.name.match(dayRe); return m ? { id: l.id, kind: m[1], day: m[2] } : null;
-  }).filter(Boolean);
-
   const people = {}; const daysSet = {};
-  for (const t of targets) {
-    const per = await scanList(t.id, ctx);
-    daysSet[t.day] = true;
-    for (const person in per) {
-      people[person] = people[person] || { person, dailyPts: 0, otPts: 0, days: {} };
-      if (t.kind === 'Done') people[person].dailyPts += per[person].pts;
-      else people[person].otPts += per[person].pts;
-      people[person].days[t.day] = (people[person].days[t.day] || 0) + per[person].pts;
+  for (const board of boardIds()) {
+    const ctx = await buildContext(board);
+    const targets = ctx.lists.map(l => {
+      const m = l.name.match(dayRe); return m ? { id: l.id, kind: m[1], day: m[2] } : null;
+    }).filter(Boolean);
+    for (const t of targets) {
+      const per = await scanList(t.id, ctx);
+      daysSet[t.day] = true;
+      for (const person in per) {
+        people[person] = people[person] || { person, dailyPts: 0, otPts: 0, days: {} };
+        if (t.kind === 'Done') people[person].dailyPts += per[person].pts;
+        else people[person].otPts += per[person].pts;
+        people[person].days[t.day] = (people[person].days[t.day] || 0) + per[person].pts;
+      }
     }
   }
   const days = Object.keys(daysSet).sort();
@@ -392,10 +429,13 @@ app.get('/api/month', async (req, res) => {
 app.get('/api/labels', async (req, res) => {
   try {
     if (!(KEY && TOKEN && BOARD)) return res.status(400).json({ error: 'Chưa cấu hình TRELLO_KEY/TOKEN/BOARD' });
-    const labels = await getLabels();
     const cfg = loadConfig();
-    const out = Object.values(labels)
-      .filter(l => l.name && !WORKFLOW_LABELS.has(l.name))
+    const byName = {};
+    for (const board of boardIds()) {
+      const labels = await getLabels(board);
+      Object.values(labels).forEach(l => { if (l.name && !WORKFLOW_LABELS.has(l.name)) byName[l.name] = l; });
+    }
+    const out = Object.values(byName)
       .map(l => ({
         name: l.name, color: l.color,
         points: pointsFor(l.name, cfg.overrides),
@@ -426,9 +466,8 @@ app.post('/api/classify', (req, res) => {
 app.get('/api/template', async (req, res) => {
   try {
     if (!(KEY && TOKEN && BOARD)) return res.status(400).json({ error: 'Chưa cấu hình TRELLO_KEY/TOKEN/BOARD' });
-    const ctx = await buildContext();
-    const t = await getTemplateProducts(ctx);
-    const cfg = ctx.cfg;
+    const t = await getTemplateProductsAll();
+    const cfg = loadConfig();
     const names = t.products.map(p => p.name);
     let initialized = false;
     if (!Array.isArray(cfg.knownTemplate)) { cfg.knownTemplate = names; saveConfig(cfg); initialized = true; }
@@ -447,8 +486,7 @@ app.get('/api/template', async (req, res) => {
 app.post('/api/template/ack', async (req, res) => {
   try {
     if (!(KEY && TOKEN && BOARD)) return res.status(400).json({ error: 'Chưa cấu hình TRELLO_KEY/TOKEN/BOARD' });
-    const ctx = await buildContext();
-    const t = await getTemplateProducts(ctx);
+    const t = await getTemplateProductsAll();
     const cfg = loadConfig();
     cfg.knownTemplate = t.products.map(p => p.name);
     saveConfig(cfg);
@@ -458,46 +496,54 @@ app.post('/api/template/ack', async (req, res) => {
 
 // trạng thái + danh sách list (cho selector)
 app.get('/api/shopify/status', (req, res) => res.json({ hasShopify: shopHasAuth(), store: SHOP || null, uploadListName: UPLOAD_LIST }));
-app.get('/api/lists', async (req, res) => {
+
+// danh sách các board đang bật (để chọn board khi push)
+app.get('/api/boards', async (req, res) => {
   try {
     if (!(KEY && TOKEN && BOARD)) return res.status(400).json({ error: 'Chưa cấu hình Trello' });
-    const lists = await getLists();
-    res.json({ lists });
+    const boards = [];
+    for (const b of boardIds()) boards.push({ id: b, name: await getBoardName(b) });
+    res.json({ boards });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// tìm cột UPLOAD + tập tên card đã có trên cột đó (để đồng bộ trạng thái "đã upload")
-async function uploadedState(idList) {
+// danh sách list của 1 board (mặc định board chính)
+app.get('/api/lists', async (req, res) => {
+  try {
+    if (!(KEY && TOKEN && BOARD)) return res.status(400).json({ error: 'Chưa cấu hình Trello' });
+    let board = req.query.board;
+    if (!board || !boardIds().includes(board)) board = BOARD;
+    const lists = await getLists(board);
+    res.json({ board, lists });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// tập tên card đã có trên cột UPLOAD của TẤT CẢ board + đã push trước đó (đồng bộ "đã upload", tránh trùng chéo board)
+async function uploadedState() {
   const set = new Set();
-  let listName = UPLOAD_LIST, listId = idList || null;
   if (KEY && TOKEN && BOARD) {
-    try {
-      if (!listId) {
-        const lists = await getLists();
+    for (const board of boardIds()) {
+      try {
+        const lists = await getLists(board);
         const up = lists.find(l => l.name === UPLOAD_LIST) || lists.find(l => /upload/i.test(l.name));
-        if (up) { listId = up.id; listName = up.name; }
-      } else {
-        const lists = await getLists();
-        const found = lists.find(l => l.id === listId);
-        if (found) listName = found.name;
-      }
-      if (listId) { const ex = await getCards(listId, 'name'); ex.forEach(c => set.add((c.name || '').trim())); }
-    } catch (e) { /* lỗi đọc Trello → coi như chưa upload */ }
+        if (up) { (await getCards(up.id, 'name')).forEach(c => set.add((c.name || '').trim())); }
+      } catch (e) { /* lỗi đọc board này → bỏ qua */ }
+    }
     try { (loadConfig().pushedOrders || []).forEach(n => set.add(n)); } catch (e) {}
   }
-  return { set, listName, listId };
+  return set;
 }
 
-// quét đơn Shopify theo ngày (xem trước) + đánh dấu đơn nào đã upload lên Trello
+// quét đơn Shopify theo ngày (xem trước) + đánh dấu đơn nào đã upload lên Trello (bất kỳ board nào)
 app.get('/api/shopify/orders', async (req, res) => {
   try {
     if (!shopHasAuth()) return res.status(400).json({ error: 'Chưa cấu hình Shopify (SHOPIFY_STORE + token hoặc CLIENT_ID/SECRET)' });
     const date = req.query.date;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return res.status(400).json({ error: 'date phải dạng YYYY-MM-DD' });
     const cards = await fetchCardsByDate(date);
-    const up = await uploadedState(req.query.idList);
-    const out = cards.map(c => Object.assign({}, c, { uploaded: up.set.has(c.name) }));
-    res.json({ date, total: out.length, uploadListName: up.listName, uploadedCount: out.filter(c => c.uploaded).length, cards: out });
+    const uploaded = await uploadedState();
+    const out = cards.map(c => Object.assign({}, c, { uploaded: uploaded.has(c.name) }));
+    res.json({ date, total: out.length, uploadListName: UPLOAD_LIST, uploadedCount: out.filter(c => c.uploaded).length, cards: out });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -541,13 +587,14 @@ app.post('/api/shopify/push', async (req, res) => {
   try {
     if (!(KEY && TOKEN && BOARD)) return res.status(400).json({ error: 'Chưa cấu hình Trello' });
     if (!shopHasAuth()) return res.status(400).json({ error: 'Chưa cấu hình Shopify' });
-    const { date, names } = req.body || {};
+    const { date, names, board } = req.body || {};
     let { idList } = req.body || {};
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return res.status(400).json({ error: 'date phải dạng YYYY-MM-DD' });
     if (!idList) {
-      const lists = await getLists();
+      const b = (board && boardIds().includes(board)) ? board : BOARD;
+      const lists = await getLists(b);
       const up = lists.find(l => l.name === UPLOAD_LIST) || lists.find(l => /upload/i.test(l.name));
-      if (!up) return res.status(400).json({ error: 'Không tìm thấy cột "' + UPLOAD_LIST + '" trên board' });
+      if (!up) return res.status(400).json({ error: 'Không tìm thấy cột "' + UPLOAD_LIST + '" trên board đã chọn' });
       idList = up.id;
     }
     // dọn job cũ đã xong quá 10 phút
@@ -584,10 +631,10 @@ if (process.env.CRON_DAILY && KEY && TOKEN && BOARD) {
       const today = new Date().toISOString().slice(0, 10);
       const r = await reportDay(today);
       console.log('[cron] Quét ' + r.tag + ' xong:', r.rows.map(x => x.person + '=' + x.totalPts).join(', '));
-      // quét Template xem có SKU mới
-      const ctx = await buildContext();
-      const tp = await getTemplateProducts(ctx);
-      const known = new Set(Array.isArray(ctx.cfg.knownTemplate) ? ctx.cfg.knownTemplate : tp.products.map(p => p.name));
+      // quét Template (cả 2 board) xem có SKU mới
+      const cfg = loadConfig();
+      const tp = await getTemplateProductsAll();
+      const known = new Set(Array.isArray(cfg.knownTemplate) ? cfg.knownTemplate : tp.products.map(p => p.name));
       const nw = tp.products.filter(p => !known.has(p.name)).map(p => p.name);
       console.log('[cron] Template: ' + tp.products.length + ' sản phẩm' + (nw.length ? ' · SKU MỚI (' + nw.length + '): ' + nw.join(' | ') : ' · không có SKU mới'));
     } catch (e) { console.error('[cron] lỗi:', e.message); }
