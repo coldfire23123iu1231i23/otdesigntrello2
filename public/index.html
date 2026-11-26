@@ -167,14 +167,17 @@
       <span class="msg" id="shopMsg"></span>
     </div>
     <div class="bar">
-      <label style="font-size:.82rem;color:var(--muted)">Tạo card vào cột:
+      <label style="font-size:.82rem;color:var(--muted)">Board:
+        <select id="shopBoard" style="font-family:var(--f);font-size:.85rem;color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:.45rem .5rem"></select>
+      </label>
+      <label style="font-size:.82rem;color:var(--muted)">Cột:
         <select id="shopList" style="font-family:var(--f);font-size:.85rem;color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:.45rem .5rem"></select>
       </label>
       <button class="go" id="btnPushShop" type="button" disabled>Tạo card Trello</button>
       <span class="msg" id="pushMsg"></span>
     </div>
     <div class="ordergrid" id="orderGrid"></div>
-    <p class="hint">Mỗi sản phẩm → 1 card: tiêu đề = mã đơn (LC#…), mô tả = tên khách + Custom Name/Number/Design Note, ảnh <b>Custom Design Image</b> làm cover. Card đã có trên cột UPLOAD được gắn nhãn <b style="color:var(--accent)">ĐÃ UPLOAD</b> và tự bỏ qua khi tạo (không trùng). Bấm <b style="color:var(--danger)">✕</b> ở góc card để bỏ sản phẩm không muốn tạo. Nút tạo chạy nền nên không bị lỗi timeout dù nhiều đơn. <b>Cần token Trello có quyền ghi (read,write)</b>.</p>
+    <p class="hint">Chọn <b>Board</b> (TrueWave Des hoặc Des 2) rồi chọn cột để tạo card. Mỗi sản phẩm → 1 card: tiêu đề = mã đơn (LC#…), mô tả = tên khách + Custom Name/Number/Design Note, ảnh <b>Custom Design Image</b> làm cover. Card đã có trên cột UPLOAD của <b>bất kỳ board nào</b> được gắn nhãn <b style="color:var(--accent)">ĐÃ UPLOAD</b> và tự bỏ qua khi tạo (không trùng chéo giữa 2 board). Bấm <b style="color:var(--danger)">✕</b> ở góc card để bỏ sản phẩm không muốn tạo. Điểm ở tab "Quét theo ngày" / "Báo cáo tháng" được <b>cộng gộp Done + OT của cả 2 board</b>. <b>Cần token Trello có quyền ghi (read,write)</b>.</p>
   </section>
 
   <p class="hint" id="cfgHint"></p>
@@ -361,6 +364,14 @@ $('btnAckTpl').onclick=ackTemplate;
 
 // ---- shopify → trello ----
 let shopOrders=[], shopInited=false, uploadListName='UPLOAD ĐƠN HÔM NAY';
+async function loadShopLists(){
+  const board=$('shopBoard').value;
+  try{
+    const r=await fetch('/api/lists'+(board?('?board='+encodeURIComponent(board)):'')).then(x=>x.json());
+    const sel=$('shopList');sel.innerHTML='';
+    (r.lists||[]).forEach(l=>{const o=document.createElement('option');o.value=l.id;o.textContent=l.name;if(l.name===uploadListName)o.selected=true;sel.appendChild(o);});
+  }catch(e){}
+}
 async function initShop(){
   if(shopInited)return; shopInited=true;
   try{
@@ -369,10 +380,12 @@ async function initShop(){
     if(!st.hasShopify){$('shopMsg').className='msg err';$('shopMsg').textContent='Chưa cấu hình Shopify (SHOPIFY_STORE / SHOPIFY_TOKEN) trên Railway.';}
   }catch(e){}
   try{
-    const r=await fetch('/api/lists').then(x=>x.json());
-    const sel=$('shopList');sel.innerHTML='';
-    (r.lists||[]).forEach(l=>{const o=document.createElement('option');o.value=l.id;o.textContent=l.name;if(l.name===uploadListName)o.selected=true;sel.appendChild(o);});
+    const rb=await fetch('/api/boards').then(x=>x.json());
+    const bsel=$('shopBoard');bsel.innerHTML='';
+    (rb.boards||[]).forEach((b,i)=>{const o=document.createElement('option');o.value=b.id;o.textContent=b.name;if(i===0)o.selected=true;bsel.appendChild(o);});
+    bsel.onchange=loadShopLists;
   }catch(e){}
+  await loadShopLists();
 }
 function pushables(){ return shopOrders.filter(o=>!o.uploaded); }
 function updatePushCount(){
@@ -385,8 +398,7 @@ async function scanOrders(){
   const msg=$('shopMsg');msg.className='msg';msg.textContent='Đang quét đơn Shopify…';
   $('btnScanShop').disabled=true;$('btnPushShop').disabled=true;$('pushMsg').textContent='';
   try{
-    const idList=$('shopList').value;
-    const r=await fetch('/api/shopify/orders?date='+date+(idList?('&idList='+idList):'')).then(x=>x.json());
+    const r=await fetch('/api/shopify/orders?date='+date).then(x=>x.json());
     if(r.error)throw new Error(r.error);
     shopOrders=r.cards;renderOrders();
     const left=pushables().length;
@@ -416,12 +428,14 @@ function renderOrders(){
 async function pushOrders(){
   const date=$('shopDate').value;const items=pushables();if(!date||!items.length)return;
   const idList=$('shopList').value;
+  const board=$('shopBoard').value;
+  const boardName=$('shopBoard').options[$('shopBoard').selectedIndex]?$('shopBoard').options[$('shopBoard').selectedIndex].textContent:'';
   const names=items.map(o=>o.name);
-  if(!confirm('Tạo '+names.length+' card Trello ngày '+date+' vào cột đã chọn?\n(Card đã có trên Trello sẽ tự bỏ qua, sản phẩm bạn đã xoá sẽ không tạo.)'))return;
+  if(!confirm('Tạo '+names.length+' card Trello ngày '+date+' vào board "'+boardName+'" (cột đã chọn)?\n(Card đã có trên Trello bất kỳ board nào sẽ tự bỏ qua, sản phẩm bạn đã xoá sẽ không tạo.)'))return;
   const msg=$('pushMsg');msg.className='msg';msg.textContent='Đang bắt đầu…';
   $('btnPushShop').disabled=true;$('btnScanShop').disabled=true;
   try{
-    const start=await fetch('/api/shopify/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date,idList,names})}).then(x=>x.json());
+    const start=await fetch('/api/shopify/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date,idList,board,names})}).then(x=>x.json());
     if(start.error)throw new Error(start.error);
     const jobId=start.jobId;
     while(true){
